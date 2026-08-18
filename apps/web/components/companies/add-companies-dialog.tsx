@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/empty-state";
+import { Field, Choices } from "@/components/filter-controls";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -74,6 +74,14 @@ export function AddCompaniesDialog({
   const [uf, setUf] = useState("");
   const [foundedFrom, setFoundedFrom] = useState("");
   const [hasPhone, setHasPhone] = useState(true);
+  // Defaults chosen from what the base actually looks like: in CNAE 8599, MEIs
+  // are 71% of the rows and almost none has a website, so a run that includes
+  // them comes back nearly all `cannot_determine`.
+  const [mei, setMei] = useState("nao");
+  const [email, setEmail] = useState("proprio");
+  const [porte, setPorte] = useState("");
+  const [matrizOnly, setMatrizOnly] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const picks = useQuery({
@@ -89,6 +97,12 @@ export function AddCompaniesDialog({
     uf: uf.length === 2 ? [uf.toUpperCase()] : undefined,
     hasPhone: hasPhone || undefined,
     foundedFrom: /^\d{4}-\d{2}-\d{2}$/.test(foundedFrom) ? foundedFrom : undefined,
+    mei: mei === "" ? undefined : mei === "sim",
+    hasEmail: email === "sim" || undefined,
+    ownDomainEmail: email === "proprio" || undefined,
+    porte: porte ? [porte] : undefined,
+    matrizOnly: matrizOnly || undefined,
+    isMobile: isMobile || undefined,
   };
 
   const results = useQuery({
@@ -161,11 +175,10 @@ export function AddCompaniesDialog({
           />
         ) : (
           <>
-            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b px-6 py-3">
-              <div className="grid gap-1">
-                <Label className="text-xs">Ordem</Label>
+            <div className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-3 border-b px-6 py-3 md:grid-cols-4">
+              <Field label="Ordem">
                 <Select value={order} onValueChange={(v) => setOrder(v as Order)}>
-                  <SelectTrigger className="h-8 w-44">
+                  <SelectTrigger className="h-8">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -175,46 +188,115 @@ export function AddCompaniesDialog({
                     <SelectItem value="capital-desc">maior capital</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="grid gap-1">
-                <Label htmlFor="a-uf" className="text-xs">
-                  UF
-                </Label>
+              </Field>
+
+              <Field label="UF" htmlFor="a-uf">
                 <Input
                   id="a-uf"
                   value={uf}
                   maxLength={2}
-                  placeholder="SP"
+                  placeholder="todas"
                   onChange={(e) => setUf(e.target.value.toUpperCase())}
-                  className="h-8 w-16"
+                  className="h-8"
                 />
-              </div>
-              <div className="grid gap-1">
-                <Label htmlFor="a-from" className="text-xs">
-                  Abertas a partir de
-                </Label>
+              </Field>
+
+              <Field label="Abertas a partir de" htmlFor="a-from">
                 <Input
                   id="a-from"
                   value={foundedFrom}
                   placeholder="2025-01-01"
                   onChange={(e) => setFoundedFrom(e.target.value)}
-                  className="h-8 w-32 font-mono"
+                  className="h-8 font-mono"
                 />
-              </div>
-              <label className="flex h-8 items-center gap-1.5 text-sm">
-                <Checkbox checked={hasPhone} onCheckedChange={(v) => setHasPhone(v === true)} />
-                só com telefone
-              </label>
-              <div className="flex-1" />
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8"
-                disabled={rows.length === 0}
-                onClick={() => setPicked(new Set(rows.map((r) => r.cnpj)))}
+              </Field>
+
+              <Field label="Porte">
+                <Choices
+                  value={porte}
+                  onChange={setPorte}
+                  options={[
+                    { value: "", label: "todos" },
+                    { value: "01", label: "n/i" },
+                    { value: "03", label: "micro" },
+                    { value: "05", label: "demais" },
+                  ]}
+                />
+              </Field>
+
+              <Field
+                label="MEI"
+                hint={mei === "nao" ? "MEI quase nunca tem site" : undefined}
+                className="col-span-2"
               >
-                Selecionar os {rows.length}
-              </Button>
+                <Choices
+                  value={mei}
+                  onChange={setMei}
+                  options={[
+                    { value: "", label: "todas" },
+                    { value: "nao", label: "sem MEI" },
+                    { value: "sim", label: "só MEI" },
+                  ]}
+                />
+              </Field>
+
+              <Field
+                label="E-mail"
+                hint={
+                  email === "proprio"
+                    ? "domínio próprio é como o site é achado de graça"
+                    : undefined
+                }
+                className="col-span-2"
+              >
+                <Choices
+                  value={email}
+                  onChange={setEmail}
+                  options={[
+                    { value: "", label: "qualquer" },
+                    { value: "sim", label: "com e-mail" },
+                    { value: "proprio", label: "domínio próprio" },
+                  ]}
+                />
+              </Field>
+
+              <Field label="Contato" className="col-span-2 md:col-span-3">
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={hasPhone}
+                      onCheckedChange={(v) => setHasPhone(v === true)}
+                    />
+                    com telefone
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={isMobile}
+                      onCheckedChange={(v) => setIsMobile(v === true)}
+                    />
+                    só celular
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={matrizOnly}
+                      onCheckedChange={(v) => setMatrizOnly(v === true)}
+                    />
+                    só matriz
+                  </label>
+                </div>
+              </Field>
+
+              <div className="flex items-end justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={rows.length === 0}
+                  onClick={() => setPicked(new Set(rows.map((r) => r.cnpj)))}
+                >
+                  Selecionar os {rows.length}
+                </Button>
+              </div>
             </div>
 
             {results.isLoading ? (

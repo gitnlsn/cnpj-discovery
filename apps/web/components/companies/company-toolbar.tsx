@@ -2,11 +2,9 @@
 
 import { Download, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import { LEAD_LABEL, LEAD_STATUSES } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -16,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Field, Choices } from "@/components/filter-controls";
 import { CnaeCombobox } from "./cnae-combobox";
 
 export interface Filters {
@@ -48,72 +46,6 @@ export const EMPTY_FILTERS: Filters = {
  */
 function activeCount(f: Filters): number {
   return [f.uf, f.flag, f.crawled, f.situacao].filter(Boolean).length;
-}
-
-/** A labelled control. Every input in the toolbar says what it is. */
-function Field({
-  label,
-  htmlFor,
-  className,
-  children,
-}: {
-  label: string;
-  htmlFor?: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={cn("grid gap-1", className)}>
-      <Label
-        htmlFor={htmlFor}
-        className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
-      >
-        {label}
-      </Label>
-      {children}
-    </div>
-  );
-}
-
-/**
- * A row of options, all visible, one click each.
- *
- * These used to be `Select`s inside the filter popover — a dropdown opening
- * inside a popover escapes its boundary and renders over the edge. For two or
- * three choices a dropdown also hides the options and costs two clicks, so
- * showing them is both better looking and faster.
- */
-function Choices({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <ToggleGroup
-      type="single"
-      value={value || "__all__"}
-      // Radix clears the value when the active item is re-clicked; keep the
-      // current one rather than dropping into an unrepresentable empty state.
-      onValueChange={(v) => onChange(v === "__all__" ? "" : v || value)}
-      className="flex flex-wrap justify-start gap-1"
-      variant="outline"
-      size="sm"
-    >
-      {options.map((o) => (
-        <ToggleGroupItem
-          key={o.value || "__all__"}
-          value={o.value || "__all__"}
-          className="h-7 rounded-md border px-2 text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
-        >
-          {o.label}
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
-  );
 }
 
 export function CompanyToolbar({

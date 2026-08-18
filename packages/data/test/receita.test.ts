@@ -9,6 +9,7 @@ import {
   cnaeReach,
   searchCnaes,
 } from "../src/receita";
+import { FREE_MAIL } from "@cnpj/core/domain";
 
 /**
  * These run against the real Parquet dataset, not a fixture.
@@ -127,5 +128,69 @@ describe("busca de CNAE", { skip: hasDataset ? false : "rode pnpm data:sync" }, 
   test("busca vazia não devolve o dicionário inteiro", async () => {
     assert.deepEqual(await searchCnaes(""), []);
     assert.deepEqual(await searchCnaes("   "), []);
+  });
+});
+
+describe("filtros novos", { skip: hasDataset ? false : "rode pnpm data:sync" }, () => {
+  const base = { cnae: ["8599605"] };
+
+  test("excluir MEI reduz o total, e MEI + não-MEI fecham a conta", async () => {
+    const todas = await countReach(base);
+    const semMei = await countReach({ ...base, mei: false });
+    const soMei = await countReach({ ...base, mei: true });
+    assert.ok(semMei.total < todas.total, "excluir MEI tem de tirar alguém");
+    assert.equal(semMei.total + soMei.total, todas.total);
+  });
+
+  test("e-mail de domínio próprio é bem mais raro que ter e-mail", async () => {
+    // É o motivo de o filtro existir: quase todo micronegócio registra gmail, e
+    // um gmail não diz nada sobre o site.
+    const comEmail = await countReach({ ...base, hasEmail: true });
+    const proprio = await countReach({ ...base, ownDomainEmail: true });
+    assert.ok(proprio.total > 0);
+    assert.ok(proprio.total < comEmail.total);
+  });
+
+  test("nenhum resultado de domínio próprio é de provedor gratuito", async () => {
+    const rows = await listCompanies({
+      filters: { ...base, ownDomainEmail: true },
+      limit: 40,
+    });
+    assert.ok(rows.length > 0);
+    for (const r of rows) {
+      const domain = (r.email ?? "").split("@")[1] ?? "";
+      assert.ok(domain, `esperava e-mail em ${r.cnpj}`);
+      assert.ok(!FREE_MAIL.has(domain), `${domain} é provedor gratuito e passou`);
+    }
+  });
+
+  test("só celular devolve apenas celular", async () => {
+    const rows = await listCompanies({
+      filters: { ...base, isMobile: true, hasPhone: true },
+      limit: 40,
+    });
+    assert.ok(rows.length > 0);
+    for (const r of rows) {
+      assert.equal(r.phone?.isMobile, true, `${r.cnpj} não é celular`);
+    }
+  });
+
+  test("porte restringe às faixas pedidas", async () => {
+    const rows = await listCompanies({ filters: { ...base, porte: ["03"] }, limit: 30 });
+    for (const r of rows) assert.equal(r.porte, "03");
+  });
+
+  test("só matriz exclui filiais", async () => {
+    const todas = await countReach(base);
+    const matriz = await countReach({ ...base, matrizOnly: true });
+    assert.ok(matriz.total <= todas.total);
+  });
+
+  test("capital mínimo só deixa passar quem tem", async () => {
+    const rows = await listCompanies({
+      filters: { ...base, minCapitalSocial: 100000 },
+      limit: 30,
+    });
+    for (const r of rows) assert.ok((r.capitalSocial ?? 0) >= 100000);
   });
 });

@@ -1,4 +1,4 @@
-import { classifyReceitaPhone, buildWaMeLink } from "@cnpj/core/domain";
+import { classifyReceitaPhone, buildWaMeLink, FREE_MAIL } from "@cnpj/core/domain";
 import { query } from "./duck";
 
 /**
@@ -26,6 +26,27 @@ export interface CompanyFilters {
   matrizOnly?: boolean;
   /** Substring match on nome fantasia / razão social. */
   q?: string;
+  /**
+   * E-mail on a domain the company plausibly owns.
+   *
+   * The single best predictor of whether a website can be found for free: the
+   * Receita has no website column, and an own-domain address IS the domain.
+   * A gmail address tells you nothing, and roughly nine in ten micro-businesses
+   * registered one.
+   */
+  ownDomainEmail?: boolean;
+  /**
+   * Mobile line, using the same nono-dígito repair the display uses.
+   *
+   * Approximate on one point: this does not validate the area code, so a row
+   * with a bogus DDD can pass here and still render as "no phone".
+   */
+  isMobile?: boolean;
+  /** Company size band: 01 não informado · 02 micro · 03 pequena · 05 demais. */
+  porte?: string[];
+  /** Legal-nature prefixes, e.g. "2" for private companies, "3" nonprofits. */
+  naturezaPrefix?: string[];
+  minCapitalSocial?: number;
 }
 
 export type CompanyOrder = "founded-desc" | "founded-asc" | "name" | "capital-desc";
@@ -104,6 +125,34 @@ function where(f: CompanyFilters, params: unknown[]): string {
   if (f.q) {
     params.push(`%${f.q.toLowerCase()}%`, `%${f.q.toLowerCase()}%`);
     parts.push(`(lower(e.nome_fantasia) LIKE ? OR lower(emp.razao_social) LIKE ?)`);
+  }
+
+  if (f.ownDomainEmail) {
+    const domains = [...FREE_MAIL];
+    parts.push(
+      `e.email IS NOT NULL AND ` +
+        `split_part(e.email, '@', 2) NOT IN (${domains.map((d) => (params.push(d), "?")).join(", ")})`
+    );
+  }
+  if (f.isMobile) {
+    // Same rule as normalizeBrazilianLocal: nine digits starting 9, or the
+    // pre-2016 eight-digit form starting 6-9.
+    parts.push(
+      `((length(e.telefone) = 9 AND e.telefone LIKE '9%') OR ` +
+        `(length(e.telefone) = 8 AND regexp_matches(e.telefone, '^[6-9]')))`
+    );
+  }
+  if (f.porte?.length) {
+    parts.push(`emp.porte IN (${f.porte.map((p) => (params.push(p), "?")).join(", ")})`);
+  }
+  if (f.naturezaPrefix?.length) {
+    parts.push(
+      `(${f.naturezaPrefix.map((n) => (params.push(`${n}%`), "emp.natureza_juridica LIKE ?")).join(" OR ")})`
+    );
+  }
+  if (f.minCapitalSocial !== undefined) {
+    params.push(f.minCapitalSocial);
+    parts.push(`emp.capital_social >= ?`);
   }
 
   return parts.length ? `WHERE ${parts.join("\n    AND ")}` : "";

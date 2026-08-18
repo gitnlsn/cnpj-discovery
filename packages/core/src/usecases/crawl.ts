@@ -1,6 +1,7 @@
 import { extractText, runProbes } from "../domain/probes";
 import type { Probe } from "../domain/spec";
 import type { HttpPort } from "../ports/index";
+import { FREE_MAIL, TYPO_MAIL, ACCOUNTANT, ACCOUNTANT_WORD } from "../domain/mail";
 
 /**
  * Fetches a company site and turns it into signals.
@@ -53,69 +54,11 @@ const FREE_BUILDERS = [
 ];
 
 /**
- * Free/consumer mail providers. An address at one of these tells us nothing
- * about a website; an address at any other domain usually IS their domain.
- */
-const FREE_MAIL = new Set([
-  "gmail.com",
-  "googlemail.com",
-  "hotmail.com",
-  "hotmail.com.br",
-  "outlook.com",
-  "outlook.com.br",
-  "live.com",
-  "msn.com",
-  "yahoo.com",
-  "yahoo.com.br",
-  "ymail.com",
-  "icloud.com",
-  "me.com",
-  "aol.com",
-  "protonmail.com",
-  "proton.me",
-  "uol.com.br",
-  "bol.com.br",
-  "terra.com.br",
-  "ig.com.br",
-  "globo.com",
-  "globomail.com",
-  "r7.com",
-  "oi.com.br",
-  "zipmail.com.br",
-  "superig.com.br",
-  "brturbo.com.br",
-  "pop.com.br",
-  "click21.com.br",
-  "veloxmail.com.br",
-]);
-
-/**
  * Receita Federal publishes no website column, so a lead with no site recorded
  * is "unknown", not "has none". The registered e-mail domain closes most of
  * that gap for free: a business that registered contato@suapadaria.com.br owns
  * suapadaria.com.br. Consumer-provider addresses are ignored.
  */
-
-/**
- * Mistyped consumer providers. These resolve to parking or spam pages and
- * would otherwise be scored as though the business owned the domain.
- */
-const TYPO_MAIL =
-  /^(gmai|gmial|gmail|hotmai|hotmial|outlok|yaho|uol|bol|terra|ig|globo)\.(com|com\.br)$/;
-
-/**
- * Brazilian accounting-office markers — the classic wrong attribution, because
- * the accountant who filed the registration puts their own address in it.
- *
- * Two patterns, not one. The short stems have to stay anchored to a boundary:
- * unanchored, "escrit" matches "descritivo" and "conta" matches half the
- * language. But that anchoring misses "silvacontabilidade.com.br", which is
- * unmistakably an accounting firm, so the unambiguous full words are matched
- * anywhere in the domain.
- */
-const ACCOUNTANT =
-  /(^|[.-])(contab|contabil|assessoria|escritorio|escrit|conta[bd]|fiscal|tributa)/;
-const ACCOUNTANT_WORD = /(contabilidade|contabeis|contadores|contabil)/;
 
 export function websiteFromEmail(email: string | null): string | null {
   if (!email) return null;
