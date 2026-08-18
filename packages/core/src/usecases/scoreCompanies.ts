@@ -1,0 +1,279 @@
+import type { LlmPort } from "../ports/index";
+import type { ProjectSpec } from "../domain/spec";
+import { tierFor, bestFit } from "../domain/spec";
+import { buildRubricPrompt, buildScoreSchema, promptSha } from "../domain/prompt";
+
+/**
+ * Scores companies against a project's rubric.
+ *
+ * The invariants worth stating, because each was paid for:
+ *
+ * - A failed call writes `error` with every fit null. It NEVER writes a number.
+ *   A fabricated 5 is indistinguishable from a real one and silently poisons
+ *   the ranking.
+ * - `tier` is computed here from the fits, never requested from the model.
+ * - The model may reject a company by line of business (`wrongType`) instead of
+ *   having to squeeze that into a 1-5 score. A CNAE is a coarse gate: "cursos
+ *   preparatórios" genuinely contains a ballooning company and an oncology
+ *   clinic, and without this they all scored 5.
+ * - The prompt and schema are built once per run, before the loop, so the
+ *   system message is constant and stays prompt-cacheable.
+ */
+
+/** How much page text the model gets per company. */
+const PAGE_EXCERPT_CHARS = 700;
+/**
+ * Below this many characters read, a probe miss proves nothing. Above it,
+ * "read the whole page and the term never appeared" is real evidence.
+ */
+const CONCLUSIVE_TEXT_CHARS = 1500;
+
+export interface ScoreCandidate {
+  cnpj: string;
+  razaoSocial: string | null;
+  nomeFantasia: string | null;
+  cnae: string;
+  cnaeDescricao: string | null;
+  uf: string | null;
+  municipio: string | null;
+  dataInicioAtividade: string | null;
+  porte: string | null;
+  mei: boolean;
+  /** Null when the site was never crawled — distinct from a crawl that failed. */
+  site: {
+    finalUrl: string | null;
+    isDead: boolean;
+    isLinkHub: boolean;
+    isFreeBuilder: boolean;
+    hasViewport: boolean | null;
+    hasWaLink: boolean | null;
+    hasContactPath: boolean | null;
+    platform: string | null;
+    footerYear: number | null;
+    title: string | null;
+    textExcerpt: string | null;
+    probes: Record<string, boolean>;
+  } | null;
+}
+
+export interface ScoreResult {
+  cnpj: string;
+  fits: Record<string, number | null>;
+  bestFit: number | null;
+  tier: "hot" | "warm" | "cold" | null;
+  confidence: "high" | "medium" | "low" | "cannot_determine" | null;
+  recommendation: string | null;
+  wrongType: boolean;
+  hook: string | null;
+  advice: string | null;
+  evidence: { evidence: string[]; justification: string } | null;
+  model: string | null;
+  promptSha: string;
+  error: string | null;
+}
+
+function years(from: string | null): string {
+  if (!from) return "idade desconhecida";
+  const start = new Date(from).getTime();
+  if (Number.isNaN(start)) return "idade desconhecida";
+  const y = (Date.now() - start) / (365.25 * 24 * 3600 * 1000);
+  return y < 1 ? "aberta há menos de 1 ano" : `aberta há ${Math.floor(y)} anos`;
+}
+
+/**
+ * Renders one company as a compact fact line.
+ *
+ * Probe hits AND misses are both rendered. Sending only the hits is what let an
+ * earlier version conflate "we read the page and the term was not there" with
+ * "we never read the page", and the model has no way to recover the difference.
+ */
+export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
+  const f: string[] = [
+    `cnpj: ${c.cnpj}`,
+    `nome: ${c.nomeFantasia ?? c.razaoSocial ?? "(sem nome)"}`,
+    `cnae: ${c.cnae}${c.cnaeDescricao ? ` (${c.cnaeDescricao})` : ""}`,
+    `local: ${c.municipio ?? "?"}/${c.uf ?? "?"}`,
+    years(c.dataInicioAtividade),
+  ];
+  if (c.porte) f.push(`porte: ${c.porte}`);
+  if (c.mei) f.push("MEI");
+
+  const detail = spec.rubric.siteSignals;
+  if (detail !== "none") {
+    if (!c.site) {
+      f.push("site: NÃO VERIFICADO");
+    } else if (c.site.isLinkHub) {
+      f.push("site: só link na bio (Instagram/Linktree), página não lida");
+    } else if (c.site.isDead) {
+      f.push("site: fora do ar");
+    } else if (!c.site.finalUrl) {
+      f.push("site: NÃO ENCONTRADO");
+    } else {
+      f.push(`site: ${c.site.finalUrl}`);
+      if (detail === "full") {
+        if (c.site.title) f.push(`título: ${c.site.title}`);
+        if (c.site.platform) f.push(`plataforma: ${c.site.platform}`);
+        if (c.site.isFreeBuilder) f.push("construtor grátis");
+        if (c.site.footerYear) f.push(`rodapé: ${c.site.footerYear}`);
+        if (c.site.hasViewport === false) f.push("não responsivo");
+        if (c.site.hasWaLink === true) f.push("tem link de WhatsApp");
+        if (c.site.hasContactPath === false) f.push("sem caminho de contato");
+      }
+    }
+  }
+
+  const lines = [`- ${f.join(" | ")}`];
+
+  if (spec.probes.length && c.site) {
+    const probes = c.site.probes ?? {};
+    const hits = spec.probes.filter((p) => probes[p.key] === true).map((p) => p.label);
+    const misses = spec.probes.filter((p) => probes[p.key] === false).map((p) => p.label);
+    const read = c.site.textExcerpt?.length ?? 0;
+    if (hits.length) lines.push(`  encontrado na página: ${hits.join(", ")}`);
+    if (misses.length) {
+      lines.push(
+        `  procurado e NÃO encontrado (li ${read} caracteres): ${misses.join(", ")}`
+      );
+    }
+    // Say it outright rather than hoping the model infers it.
+    if (!hits.length && read >= CONCLUSIVE_TEXT_CHARS) {
+      lines.push(
+        `  CONFLITO: li a página inteira (${read} caracteres) e NENHUM sinal do produto apareceu.`
+      );
+    }
+  }
+
+  if (c.site?.textExcerpt) {
+    lines.push(`  texto da página: ${c.site.textExcerpt.slice(0, PAGE_EXCERPT_CHARS)}`);
+  }
+
+  return lines.join("\n");
+}
+
+interface RawResult {
+  cnpj?: string;
+  justification?: string;
+  wrong_business_type?: boolean;
+  confidence?: string;
+  recommendation?: string;
+  evidence?: string[];
+  hook?: string | null;
+  advice?: string | null;
+  [axis: string]: unknown;
+}
+
+const CONFIDENCES = ["high", "medium", "low", "cannot_determine"] as const;
+
+function failed(cnpj: string, sha: string, error: string): ScoreResult {
+  return {
+    cnpj, fits: {}, bestFit: null, tier: null, confidence: null,
+    recommendation: null, wrongType: false, hook: null, advice: null,
+    evidence: null, model: null, promptSha: sha, error,
+  };
+}
+
+export interface ScoreOptions {
+  batchSize?: number;
+  onProgress?: (done: number, total: number) => void;
+}
+
+export async function scoreCompanies(
+  llm: LlmPort,
+  spec: ProjectSpec,
+  candidates: ScoreCandidate[],
+  opts: ScoreOptions = {}
+): Promise<ScoreResult[]> {
+  if (candidates.length === 0) return [];
+
+  // Built once, outside the loop: constant system message, cacheable prompt.
+  const system = buildRubricPrompt(spec);
+  const schema = buildScoreSchema(spec);
+  const sha = promptSha(system);
+  const axisKeys = spec.rubric.axes.map((a) => a.key);
+  const batchSize = Math.min(Math.max(opts.batchSize ?? 10, 1), 20);
+
+  const out: ScoreResult[] = [];
+
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize);
+    const user = batch.map((c) => renderCandidate(c, spec)).join("\n\n");
+
+    let results: RawResult[] = [];
+    let model: string | null = null;
+    try {
+      const res = await llm.completeJson<{ results?: RawResult[] } | RawResult[]>({
+        task: "score",
+        schemaName: "scores",
+        schema,
+        maxTokens: 400 * batch.length + 500,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      });
+      model = res.model;
+      // Tolerate the three shapes models actually return.
+      const v = res.value as { results?: RawResult[]; leads?: RawResult[] } | RawResult[];
+      results = Array.isArray(v) ? v : (v.results ?? v.leads ?? []);
+    } catch (err) {
+      const message = (err as Error).message.slice(0, 300);
+      for (const c of batch) out.push(failed(c.cnpj, sha, message));
+      opts.onProgress?.(Math.min(i + batchSize, candidates.length), candidates.length);
+      continue;
+    }
+
+    const byCnpj = new Map(results.map((r) => [String(r.cnpj ?? "").replace(/\D/g, ""), r]));
+
+    for (const c of batch) {
+      const r = byCnpj.get(c.cnpj);
+      if (!r) {
+        out.push(failed(c.cnpj, sha, "modelo não devolveu resultado para este CNPJ"));
+        continue;
+      }
+
+      const fits: Record<string, number | null> = {};
+      for (const key of axisKeys) {
+        const raw = r[key];
+        const n = typeof raw === "number" ? raw : Number(raw);
+        fits[key] = Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
+      }
+
+      const justification = String(r.justification ?? "");
+      // The model has been observed writing "o site é de outro ramo" while
+      // leaving the boolean false. The forced [RAMO: ...] tag is the tiebreak,
+      // and the two are OR-ed so either signal is enough.
+      const wrongType =
+        r.wrong_business_type === true || /\[RAMO:\s*errado\]/i.test(justification);
+
+      const confidence = CONFIDENCES.includes(r.confidence as never)
+        ? (r.confidence as ScoreResult["confidence"])
+        : null;
+
+      const best = bestFit(fits);
+      out.push({
+        cnpj: c.cnpj,
+        fits,
+        bestFit: best,
+        tier: tierFor(fits),
+        confidence,
+        recommendation: r.recommendation ? String(r.recommendation).slice(0, 40) : null,
+        wrongType,
+        hook: r.hook ? String(r.hook).slice(0, 500) : null,
+        advice: r.advice ? String(r.advice).slice(0, 500) : null,
+        evidence: {
+          // Capped, unlike the version this came from, where it was the one
+          // text column with no length guard.
+          evidence: (r.evidence ?? []).map((e) => String(e).slice(0, 300)).slice(0, 10),
+          justification: justification.slice(0, 2000),
+        },
+        model,
+        promptSha: sha,
+        error: null,
+      });
+    }
+
+    opts.onProgress?.(Math.min(i + batchSize, candidates.length), candidates.length);
+  }
+
+  return out;
+}

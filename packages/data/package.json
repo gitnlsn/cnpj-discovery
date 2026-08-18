@@ -1,0 +1,19 @@
+{
+  "name": "@cnpj/data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A base da Receita em Parquet, consultada com DuckDB. Somente leitura.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sync": "./src/sync/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@cnpj/core": "workspace:*",
+    "@duckdb/node-api": "^1.5.5-r.4"
+  }
+}

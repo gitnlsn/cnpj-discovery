@@ -1,0 +1,16 @@
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+
+# Generated data. Everything here is reproducible from `pnpm data:sync`.
+data/downloads/
+data/parquet/
+data/ref/
+app.db
+app.db-*
+
+# The old project lives here for reference only.
+gmaps-whatsapp-extractor/

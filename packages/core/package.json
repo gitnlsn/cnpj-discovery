@@ -1,0 +1,21 @@
+{
+  "name": "@cnpj/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Domínio puro: sem I/O, sem process.env, sem console.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain/index.ts",
+    "./ports": "./src/ports/index.ts",
+    "./adapters/*": "./src/adapters/*.ts",
+    "./services/*": "./src/services/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "libphonenumber-js": "^1.12.28"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@cnpj/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Estado do app em SQLite: projetos, ICP, empresas escolhidas, crawls, notas.",
+  "exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/migrate.ts",
+    "test": "tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@cnpj/core": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": { "@types/better-sqlite3": "^7.6.13" }
+}

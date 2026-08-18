@@ -1,0 +1,221 @@
+import { z } from "zod";
+import { eq, and } from "drizzle-orm";
+import { projects, cnaePicks, companies } from "@cnpj/db";
+import { suggestCnaes, parseProjectSpec } from "@cnpj/core";
+import {
+  listCompanies,
+  listCompaniesByCnpj,
+  countReach,
+  searchCnaes,
+  cnaeReach,
+} from "@cnpj/data";
+import { router, publicProcedure, notFound } from "../trpc";
+import { requireLlm } from "../../lib/llm";
+
+const filters = z.object({
+  cnae: z.array(z.string().regex(/^\d{2,7}$/)).max(40).optional(),
+  uf: z.array(z.string().length(2)).max(27).optional(),
+  foundedFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  foundedTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  hasPhone: z.boolean().optional(),
+  hasEmail: z.boolean().optional(),
+  mei: z.boolean().optional(),
+  matrizOnly: z.boolean().optional(),
+  q: z.string().max(120).optional(),
+});
+
+export const discoveryRouter = router({
+  /**
+   * Asks the model for CNAEs, then checks every one against the official
+   * dictionary and the real counts before any of it reaches the screen.
+   *
+   * A code that does not exist is stored as "unknown" rather than dropped: a
+   * hallucination that disappears silently looks exactly like a segment the
+   * model chose not to suggest.
+   */
+  suggest: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const [row] = await ctx.db.select().from(projects).where(eq(projects.id, input.projectId));
+      if (!row) notFound(`projeto ${input.projectId} não existe`);
+
+      const { suggestions, model } = await suggestCnaes(requireLlm(), {
+        description: row.description,
+        icpText: row.icpText,
+      });
+
+      // The spec's UF filter, if it has been compiled, scopes the counts so the
+      // reach numbers match what the list will actually show.
+      let ufs: string[] | undefined;
+      try {
+        const spec = row.spec ? parseProjectSpec(row.spec) : null;
+        if (spec?.targeting.ufs.length) ufs = spec.targeting.ufs;
+      } catch {
+        /* an unparseable stored spec must not block discovery */
+      }
+
+      const checked = await cnaeReach(
+        suggestions.map((s) => s.cnae),
+        ufs ? { uf: ufs } : {}
+      );
+      const byCode = new Map(checked.map((c) => [c.codigo, c]));
+
+      const rows = suggestions.map((s) => {
+        const r = byCode.get(s.cnae);
+        const status: "ok" | "unknown" | "empty" =
+          !r || r.descricao === null ? "unknown" : r.total === 0 ? "empty" : "ok";
+        return {
+          projectId: input.projectId,
+          cnae: s.cnae,
+          descricao: r?.descricao ?? null,
+          status,
+          reachTotal: r?.total ?? 0,
+          reachWithPhone: r?.withPhone ?? 0,
+          reachRecent: r?.recent ?? 0,
+          // Kept so the model's guess can be compared against the real label —
+          // that mismatch is the tell for a plausible-looking wrong code.
+          rationale: `${s.rationale}${
+            r?.descricao && s.guessedLabel ? ` · o modelo achou que era "${s.guessedLabel}"` : ""
+          }`,
+          suggestedBy: "llm" as const,
+          chosen: false,
+        };
+      });
+
+      if (rows.length) {
+        await ctx.db
+          .insert(cnaePicks)
+          .values(rows)
+          .onConflictDoUpdate({
+            target: [cnaePicks.projectId, cnaePicks.cnae],
+            set: {
+              descricao: rows[0]!.descricao,
+              checkedAt: new Date().toISOString(),
+            },
+          });
+      }
+      return { model, picks: rows };
+    }),
+
+  picks: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(({ ctx, input }) =>
+      ctx.db.select().from(cnaePicks).where(eq(cnaePicks.projectId, input.projectId))
+    ),
+
+  /** Add a CNAE by hand, still checked against the dictionary. */
+  addPick: publicProcedure
+    .input(z.object({ projectId: z.string(), cnae: z.string().regex(/^\d{2,7}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const [r] = await cnaeReach([input.cnae]);
+      await ctx.db
+        .insert(cnaePicks)
+        .values({
+          projectId: input.projectId,
+          cnae: input.cnae,
+          descricao: r?.descricao ?? null,
+          status: !r || r.descricao === null ? "unknown" : r.total === 0 ? "empty" : "ok",
+          reachTotal: r?.total ?? 0,
+          reachWithPhone: r?.withPhone ?? 0,
+          reachRecent: r?.recent ?? 0,
+          suggestedBy: "human",
+          chosen: true,
+        })
+        .onConflictDoUpdate({
+          target: [cnaePicks.projectId, cnaePicks.cnae],
+          // Re-resolve, don't just flip `chosen`: a row seeded before the
+          // dictionary lookup improved would keep its stale verdict forever.
+          set: {
+            chosen: true,
+            descricao: r?.descricao ?? null,
+            status: !r || r.descricao === null ? "unknown" : r.total === 0 ? "empty" : "ok",
+            reachTotal: r?.total ?? 0,
+            reachWithPhone: r?.withPhone ?? 0,
+            reachRecent: r?.recent ?? 0,
+            checkedAt: new Date().toISOString(),
+          },
+        });
+      return { ok: true };
+    }),
+
+  setChosen: publicProcedure
+    .input(z.object({ projectId: z.string(), cnae: z.string(), chosen: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .update(cnaePicks)
+        .set({ chosen: input.chosen })
+        .where(and(eq(cnaePicks.projectId, input.projectId), eq(cnaePicks.cnae, input.cnae)));
+      return { ok: true };
+    }),
+
+  searchCnaes: publicProcedure
+    .input(z.object({ q: z.string().min(1).max(80) }))
+    .query(({ input }) => searchCnaes(input.q)),
+
+  /** The list itself. Ordered newest-first by default. */
+  companies: publicProcedure
+    .input(
+      z.object({
+        filters,
+        order: z.enum(["founded-desc", "founded-asc", "name", "capital-desc"]).default("founded-desc"),
+        limit: z.number().int().min(1).max(500).default(50),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(({ input }) =>
+      listCompanies({
+        filters: input.filters,
+        order: input.order,
+        limit: input.limit,
+        offset: input.offset,
+      })
+    ),
+
+  reach: publicProcedure.input(z.object({ filters })).query(({ input }) => countReach(input.filters)),
+
+  /**
+   * Pulls chosen companies into the project. This is the only moment anything
+   * from the Receita base is written to the app's own database.
+   */
+  addCompanies: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        cnpjs: z.array(z.string().regex(/^\d{14}$/)).min(1).max(2000),
+        sourcePeriod: z.string().max(10).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Re-read from the Parquet base rather than trusting whatever the client
+      // posted: the browser sends CNPJs, not company records.
+      const rows = await listCompaniesByCnpj(input.cnpjs);
+      if (rows.length === 0) return { added: 0 };
+
+      await ctx.db
+        .insert(companies)
+        .values(
+          rows.map((c) => ({
+            projectId: input.projectId,
+            cnpj: c.cnpj,
+            razaoSocial: c.razaoSocial,
+            nomeFantasia: c.nomeFantasia,
+            cnae: c.cnae,
+            cnaeDescricao: c.cnaeDescricao,
+            uf: c.uf,
+            municipio: c.municipio,
+            bairro: c.bairro,
+            dataInicioAtividade: c.dataInicioAtividade,
+            porte: c.porte,
+            capitalSocial: c.capitalSocial,
+            naturezaJuridica: c.naturezaJuridica,
+            mei: c.mei,
+            simples: c.simples,
+            email: c.email,
+            sourcePeriod: input.sourcePeriod ?? null,
+          }))
+        )
+        .onConflictDoNothing();
+
+      return { added: rows.length };
+    }),
+});

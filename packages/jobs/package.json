@@ -1,0 +1,15 @@
+{
+  "name": "@cnpj/jobs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Trabalho longo rodando no processo, com progresso na tabela jobs.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@cnpj/core": "workspace:*",
+    "@cnpj/data": "workspace:*",
+    "@cnpj/db": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  }
+}
