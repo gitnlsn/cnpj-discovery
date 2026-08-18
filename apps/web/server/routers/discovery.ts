@@ -122,6 +122,7 @@ export const discoveryRouter = router({
     .input(z.object({ projectId: z.string(), cnae: z.string().regex(/^\d{2,7}$/) }))
     .mutation(async ({ ctx, input }) => {
       const [r] = await cnaeReach([input.cnae]);
+      const usable = Boolean(r && r.descricao !== null && r.total > 0);
       await ctx.db
         .insert(cnaePicks)
         .values({
@@ -133,14 +134,16 @@ export const discoveryRouter = router({
           reachWithPhone: r?.withPhone ?? 0,
           reachRecent: r?.recent ?? 0,
           suggestedBy: "human",
-          chosen: true,
+          // Only a code that exists AND has companies can be used. Marking an
+          // invented code as chosen makes it look like part of the targeting.
+          chosen: usable,
         })
         .onConflictDoUpdate({
           target: [cnaePicks.projectId, cnaePicks.cnae],
           // Re-resolve, don't just flip `chosen`: a row seeded before the
           // dictionary lookup improved would keep its stale verdict forever.
           set: {
-            chosen: true,
+            chosen: usable,
             descricao: r?.descricao ?? null,
             status: !r || r.descricao === null ? "unknown" : r.total === 0 ? "empty" : "ok",
             reachTotal: r?.total ?? 0,

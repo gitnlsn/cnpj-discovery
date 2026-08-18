@@ -165,3 +165,18 @@ test("a wholly degenerate recommendation list falls back to a usable default", (
     ["abordar", "descartar"]
   );
 });
+
+test("the literal string 'null' is not data", () => {
+  // Models emit "null" as a string often enough that it reaches the screen. In
+  // the ICP panel that column exists to explain WHY a criterion failed to map,
+  // so "null" there reads as an answer when it is the absence of one.
+  const spec = parseProjectSpec({
+    ...minimal,
+    icpCoverage: [
+      { criterion: "mais de 50 funcionários", mapped: false, mappedTo: "null" },
+      { criterion: "em SP", mapped: true, mappedTo: "uf: SP" },
+    ],
+  });
+  assert.equal(spec.icpCoverage[0]?.mappedTo, "");
+  assert.equal(spec.icpCoverage[1]?.mappedTo, "uf: SP");
+});

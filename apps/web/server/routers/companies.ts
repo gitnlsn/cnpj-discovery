@@ -3,6 +3,7 @@ import { eq, and, inArray, desc, asc, sql } from "drizzle-orm";
 import { companies, crawls, scores, leads, contacts, placesLookups } from "@cnpj/db";
 import { websiteFromEmail, type SiteSignals } from "@cnpj/core";
 import { router, publicProcedure } from "../trpc";
+import { runPipeline } from "../pipeline";
 
 /**
  * One query behind the companies view.
@@ -139,6 +140,54 @@ export const companiesRouter = router({
         flagged: Number(row?.flagged ?? 0),
       };
     }),
+
+  /**
+   * The CNAEs actually present in this project's companies, with descriptions.
+   *
+   * Filtering by a code you have to remember is not filtering. These come from
+   * the rows themselves rather than from `cnae_picks`, because a project can
+   * hold companies from a CNAE that was later unchecked.
+   */
+  cnaeOptions: publicProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .select({
+          cnae: companies.cnae,
+          descricao: companies.cnaeDescricao,
+          n: sql<number>`count(*)`,
+        })
+        .from(companies)
+        .where(eq(companies.projectId, input.projectId))
+        .groupBy(companies.cnae, companies.cnaeDescricao)
+        .orderBy(desc(sql`count(*)`));
+      return rows.map((r) => ({
+        cnae: r.cnae,
+        descricao: r.descricao,
+        count: Number(r.n),
+      }));
+    }),
+
+  /**
+   * Visit the sites, then score — one job, in that order.
+   *
+   * The order is the whole point: a company whose site was never read can only
+   * ever come back `cannot_determine`, so scoring first wastes the call. This
+   * is what "added to the pipeline" means for a freshly pulled company.
+   */
+  process: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        cnpjs: z
+          .array(z.string().regex(/^\d{14}$/))
+          .min(1)
+          .max(500),
+        depth: z.number().int().min(0).max(5).default(0),
+        concurrency: z.number().int().min(1).max(20).default(6),
+      })
+    )
+    .mutation(({ ctx, input }) => runPipeline(ctx.db, input)),
 
   /** Removes companies from the project. Cascade-free: leads/scores stay keyed. */
   remove: publicProcedure

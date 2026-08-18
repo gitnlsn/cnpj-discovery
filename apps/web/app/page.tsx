@@ -1,259 +1,175 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FolderKanban, Pencil, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc";
-import { useProject, ErrorBox } from "@/components/bits";
-import { CnaePanel } from "@/components/CnaePanel";
-import type { ProjectSpec, Axis, Probe } from "@cnpj/core";
+import { useProject } from "@/lib/use-project";
+import { dateBr, errorMessage } from "@/lib/format";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/empty-state";
+import { ProjectFormDialog } from "@/components/project/project-form-dialog";
+import { IcpCoverageCard } from "@/components/project/icp-coverage-card";
+import { RubricCard } from "@/components/project/rubric-card";
+import { CnaeTable } from "@/components/project/cnae-table";
 
-function slugify(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-}
-
-function ProjectTab() {
+function ProjectPage() {
   const trpc = useTRPC();
   const qc = useQueryClient();
-  const [projectId, setProject] = useProject();
+  const [projectId] = useProject();
+  const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState({ name: "", description: "", icpText: "" });
 
-  const list = useQuery(trpc.project.list.queryOptions());
-  const current = useQuery({
+  const project = useQuery({
     ...trpc.project.get.queryOptions({ id: projectId ?? "" }),
     enabled: Boolean(projectId),
   });
 
-  const invalidate = () => {
-    void qc.invalidateQueries({ queryKey: trpc.project.list.queryKey() });
-    if (projectId)
-      void qc.invalidateQueries({ queryKey: trpc.project.get.queryKey({ id: projectId }) });
-  };
-
-  const create = useMutation({
-    ...trpc.project.create.mutationOptions(),
-    onSuccess: (r) => {
-      setCreating(false);
-      invalidate();
-      setProject(r.id);
-    },
-  });
-  const update = useMutation({
-    ...trpc.project.update.mutationOptions(),
-    onSuccess: invalidate,
-  });
   const compile = useMutation({
     ...trpc.project.compile.mutationOptions(),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      void qc.invalidateQueries();
+      toast.success("Perfil compilado.");
+    },
+    onError: (e) => toast.error(errorMessage(e) ?? "Falhou."),
   });
 
-  const project = current.data;
-  const spec = project?.spec ?? null;
+  if (!projectId) {
+    return (
+      <>
+        <Card>
+          <EmptyState
+            icon={FolderKanban}
+            title="Nenhum projeto escolhido"
+            description="Um projeto guarda o que você vende, o perfil de cliente ideal e os CNAEs alvo. Tudo o mais é escopado por ele."
+            action={<Button onClick={() => setCreating(true)}>Criar projeto</Button>}
+          />
+        </Card>
+        <ProjectFormDialog open={creating} onOpenChange={setCreating} />
+      </>
+    );
+  }
+
+  if (project.isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  const p = project.data;
+  if (!p) return null;
+  const spec = p.spec;
 
   return (
-    <>
-      <h1>Projetos</h1>
-      <p className="lede">
-        Descreva o que você vende e quem é o cliente ideal, em português corrido. O modelo
-        transforma isso em filtros e numa rubrica de pontuação — e mostra quais critérios ele{" "}
-        <b>não</b> conseguiu transformar em filtro.
-      </p>
-
-      <div className="panel">
-        <div className="row">
-          <select
-            className="sel"
-            style={{ maxWidth: 320 }}
-            value={projectId ?? ""}
-            onChange={(e) => e.target.value && setProject(e.target.value)}
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-0.5">
+          <h1 className="text-lg font-semibold tracking-tight">{p.name}</h1>
+          <p className="line-clamp-2 max-w-2xl text-sm text-muted-foreground">
+            {p.description || "Sem descrição — edite o projeto para começar."}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+            <Pencil className="size-3.5" />
+            Editar
+          </Button>
+          <Button
+            size="sm"
+            disabled={compile.isPending || !p.description.trim()}
+            onClick={() => compile.mutate({ id: p.id })}
           >
-            <option value="">— escolha um projeto —</option>
-            {(list.data ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <button className="btn" onClick={() => setCreating((v) => !v)}>
-            {creating ? "Cancelar" : "Novo projeto"}
-          </button>
+            <Sparkles className="size-3.5" />
+            {compile.isPending ? "Compilando…" : "Compilar perfil"}
+            <span className="text-xs opacity-70">gasta LLM · 2 chamadas</span>
+          </Button>
         </div>
       </div>
 
-      {creating && (
-        <div className="panel">
-          <ErrorBox error={create.error} />
-          <label className="field">
-            <span>Nome</span>
-            <input
-              className="inp"
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              placeholder="Sites para escolas particulares"
-            />
-          </label>
-          <label className="field">
-            <span>O que você vende</span>
-            <small>Concreto. O que o cliente recebe e o que muda para ele.</small>
-            <textarea
-              className="inp"
-              value={draft.description}
-              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-              placeholder="Site institucional com portal do aluno, entregue em duas semanas..."
-            />
-          </label>
-          <label className="field">
-            <span>Perfil de cliente ideal (ICP)</span>
-            <small>Do jeito que você explicaria para alguém. Critério por critério.</small>
-            <textarea
-              className="inp"
-              value={draft.icpText}
-              onChange={(e) => setDraft({ ...draft, icpText: e.target.value })}
-              placeholder="escolas particulares de ensino médio, não-MEI, com mais de 50 alunos..."
-            />
-          </label>
-          <button
-            className="btn btn-primary"
-            disabled={draft.name.trim().length < 2 || create.isPending}
-            onClick={() => create.mutate({ ...draft, id: slugify(draft.name) })}
-          >
-            {create.isPending ? "Criando…" : "Criar projeto"}
-          </button>
-        </div>
+      {p.specCompiledAt && (
+        <p className="text-xs text-muted-foreground">
+          Compilado em {dateBr(p.specCompiledAt)}
+          {p.specModel ? ` · ${p.specModel}` : ""}
+        </p>
       )}
 
-      {project && (
-        <>
-          <div className="panel">
-            <label className="field">
-              <span>O que você vende</span>
-              <textarea
-                className="inp"
-                defaultValue={project.description}
-                onBlur={(e) => update.mutate({ id: project.id, description: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>Perfil de cliente ideal (ICP)</span>
-              <textarea
-                className="inp"
-                defaultValue={project.icpText}
-                onBlur={(e) => update.mutate({ id: project.id, icpText: e.target.value })}
-              />
-            </label>
-            <div className="row">
-              <button
-                className="btn btn-primary"
-                disabled={compile.isPending || !project.description.trim()}
-                onClick={() => compile.mutate({ id: project.id })}
-              >
-                {compile.isPending ? "Compilando…" : "Compilar perfil"}
-                <small>gasta LLM · 2 chamadas</small>
-              </button>
-              {project.specCompiledAt && (
-                <span className="muted">
-                  compilado {new Date(project.specCompiledAt).toLocaleString("pt-BR")}
-                  {project.specModel ? ` · ${project.specModel}` : ""}
-                </span>
-              )}
-            </div>
-            <ErrorBox error={compile.error} />
-          </div>
+      <Tabs defaultValue={spec ? "perfil" : "cnaes"}>
+        <TabsList>
+          <TabsTrigger value="perfil">Perfil</TabsTrigger>
+          <TabsTrigger value="rubrica">Rubrica</TabsTrigger>
+          <TabsTrigger value="cnaes">CNAEs</TabsTrigger>
+        </TabsList>
 
-          {spec && <SpecPanel spec={spec} />}
-          <CnaePanel projectId={project.id} />
-        </>
+        <TabsContent value="perfil" className="mt-3">
+          {spec ? (
+            <IcpCoverageCard spec={spec} />
+          ) : (
+            <NotCompiled onCompile={() => compile.mutate({ id: p.id })} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="rubrica" className="mt-3">
+          {spec ? (
+            <RubricCard spec={spec} />
+          ) : (
+            <NotCompiled onCompile={() => compile.mutate({ id: p.id })} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="cnaes" className="mt-3">
+          <CnaeTable projectId={p.id} />
+        </TabsContent>
+      </Tabs>
+
+      {compile.error && (
+        <Alert variant="destructive">
+          <AlertDescription>{errorMessage(compile.error)}</AlertDescription>
+        </Alert>
       )}
-    </>
+
+      <ProjectFormDialog
+        open={editing}
+        onOpenChange={setEditing}
+        initial={{
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          icpText: p.icpText,
+        }}
+      />
+    </div>
   );
 }
 
-/**
- * The ICP coverage panel.
- *
- * The `não deu` rows are the reason this exists. The Receita has no headcount,
- * no revenue and no tech stack, so a criterion asking for one cannot become a
- * filter — and without saying so, the list comes out broader than the profile
- * asked for and nothing on screen admits it.
- */
-function SpecPanel({ spec }: { spec: ProjectSpec }) {
+function NotCompiled({ onCompile }: { onCompile: () => void }) {
   return (
-    <>
-      <h2>Do seu perfil de cliente ideal</h2>
-      <div className="tbl-wrap">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>situação</th>
-              <th>critério</th>
-              <th>onde entrou</th>
-            </tr>
-          </thead>
-          <tbody>
-            {spec.icpCoverage.map((c, i) => (
-              <tr key={i}>
-                <td>
-                  <span className={`chip ${c.mapped ? "chip-plain" : "chip-bad"}`}>
-                    {c.mapped ? "filtro" : "não deu"}
-                  </span>
-                </td>
-                <td className="wrap">{c.criterion}</td>
-                <td className="wrap muted">{c.mappedTo}</td>
-              </tr>
-            ))}
-            {spec.icpCoverage.length === 0 && (
-              <tr>
-                <td colSpan={3} className="muted">
-                  nenhum critério registrado
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <h2>Rubrica</h2>
-      <div className="panel">
-        <p style={{ marginTop: 0 }}>
-          <b>{spec.summary}</b>
-        </p>
-        <p className="muted" style={{ margin: "4px 0" }}>
-          Quem decide: {spec.buyer} · Problema: {spec.problem}
-        </p>
-        {spec.rubric.axes.map((a: Axis) => (
-          <details key={a.key} style={{ marginTop: 8 }}>
-            <summary>
-              <b>{a.label}</b> — {a.question}
-            </summary>
-            <ul style={{ margin: "6px 0", paddingLeft: 20 }}>
-              {(["5", "4", "3", "2", "1"] as const).map((lvl) => (
-                <li key={lvl}>
-                  <code>{lvl}</code> {a.anchors[lvl]}
-                </li>
-              ))}
-            </ul>
-          </details>
-        ))}
-        {spec.probes.length > 0 && (
-          <p className="muted" style={{ marginBottom: 0 }}>
-            Sinais procurados na página: {spec.probes.map((p: Probe) => p.label).join(", ")}
-          </p>
-        )}
-      </div>
-    </>
+    <Card>
+      <EmptyState
+        icon={Sparkles}
+        title="Perfil ainda não compilado"
+        description="Compilar transforma o texto do ICP em filtros e numa rubrica — e diz quais critérios a base da Receita não consegue atender."
+        action={
+          <Button size="sm" onClick={onCompile}>
+            Compilar perfil
+          </Button>
+        }
+      />
+    </Card>
   );
 }
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="muted">carregando…</p>}>
-      <ProjectTab />
+    <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+      <ProjectPage />
     </Suspense>
   );
 }

@@ -109,8 +109,20 @@ function str(v: unknown, field: string, max: number = LIMITS.maxTextLen): string
   return v.trim().slice(0, max);
 }
 
+/**
+ * Models emit the *string* "null" surprisingly often, and it reads as data.
+ *
+ * Seen in the ICP coverage panel, whose whole job is to say why a criterion
+ * could not become a filter: rendering "null" there is worse than rendering
+ * nothing, because it looks like an answer.
+ */
+const NULLISH = new Set(["null", "undefined", "none", "n/a", "na", "-"]);
+
 function optStr(v: unknown, max: number = LIMITS.maxTextLen): string | null {
-  return typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  if (!t || NULLISH.has(t.toLowerCase())) return null;
+  return t.slice(0, max);
 }
 
 function strArray(

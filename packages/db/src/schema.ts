@@ -232,7 +232,7 @@ export const jobs = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     kind: text("kind", {
-      enum: ["compile", "discover", "crawl", "score", "places"],
+      enum: ["compile", "discover", "crawl", "score", "places", "pipeline"],
     }).notNull(),
     projectId: text("project_id"),
     status: text("status", { enum: ["running", "done", "failed", "cancelled"] }).notNull(),

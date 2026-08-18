@@ -138,7 +138,7 @@ CREATE INDEX IF NOT EXISTS leads_status_idx ON leads (project_id, status);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places')),
+  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline')),
   project_id  TEXT,
   status      TEXT NOT NULL CHECK (status IN ('running','done','failed','cancelled')),
   progress    TEXT,
@@ -160,9 +160,25 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 `;
 
+/**
+ * `jobs.kind` gained 'pipeline', and SQLite cannot alter a CHECK constraint.
+ *
+ * The table is rebuilt when the old constraint is still in place. Job rows are
+ * a log of runs — nothing downstream reads them — so dropping the history is
+ * the cheap correct answer rather than carrying a migration framework.
+ */
+function upgradeJobsKind(sqlite: Database.Database): void {
+  const row = sqlite
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'pipeline'")) return;
+  sqlite.exec("DROP TABLE jobs;");
+}
+
 export function migrate(path = dbPath()): void {
   const sqlite = new Database(path);
   sqlite.pragma("journal_mode = WAL");
+  upgradeJobsKind(sqlite);
   sqlite.exec(DDL);
   sqlite.close();
 }
