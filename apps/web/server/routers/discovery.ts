@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { projects, cnaePicks, companies } from "@cnpj/db";
 import { suggestCnaes, parseProjectSpec } from "@cnpj/core";
 import {
@@ -111,11 +111,28 @@ export const discoveryRouter = router({
       return { model, picks: rows };
     }),
 
-  picks: publicProcedure
-    .input(z.object({ projectId: z.string() }))
-    .query(({ ctx, input }) =>
-      ctx.db.select().from(cnaePicks).where(eq(cnaePicks.projectId, input.projectId))
-    ),
+  /**
+   * The project's CNAEs, usable ones first.
+   *
+   * A single `suggest` run can return more invented codes than real ones — the
+   * model answered nine bogus codes and four good ones on the education
+   * profile. Interleaved by code number, that buries the rows you can act on.
+   *
+   * The invented ones are still returned, never dropped: a filter you cannot
+   * inspect is indistinguishable from a hole in the data. They just go last.
+   */
+  picks: publicProcedure.input(z.object({ projectId: z.string() })).query(({ ctx, input }) =>
+    ctx.db
+      .select()
+      .from(cnaePicks)
+      .where(eq(cnaePicks.projectId, input.projectId))
+      .orderBy(
+        sql`CASE ${cnaePicks.status} WHEN 'ok' THEN 0 WHEN 'empty' THEN 1 ELSE 2 END`,
+        desc(cnaePicks.chosen),
+        desc(cnaePicks.reachTotal),
+        cnaePicks.cnae
+      )
+  ),
 
   /** Add a CNAE by hand, still checked against the dictionary. */
   addPick: publicProcedure
@@ -166,8 +183,10 @@ export const discoveryRouter = router({
     }),
 
   searchCnaes: publicProcedure
-    .input(z.object({ q: z.string().min(1).max(80) }))
-    .query(({ input }) => searchCnaes(input.q)),
+    .input(
+      z.object({ q: z.string().max(80), limit: z.number().int().min(1).max(50).default(30) })
+    )
+    .query(({ input }) => searchCnaes(input.q, input.limit)),
 
   /** The list itself. Ordered newest-first by default. */
   companies: publicProcedure

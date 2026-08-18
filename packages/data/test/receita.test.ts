@@ -2,7 +2,13 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { paths } from "../src/duck";
-import { describeCnae, listCompanies, countReach, cnaeReach } from "../src/receita";
+import {
+  describeCnae,
+  listCompanies,
+  countReach,
+  cnaeReach,
+  searchCnaes,
+} from "../src/receita";
 
 /**
  * These run against the real Parquet dataset, not a fixture.
@@ -92,5 +98,34 @@ describe("consultas na base da Receita", { skip: hasDataset ? false : "rode pnpm
     assert.ok(out[0]!.total > 0);
     assert.equal(out[1]!.descricao, null);
     assert.equal(out[1]!.total, 0);
+  });
+});
+
+describe("busca de CNAE", { skip: hasDataset ? false : "rode pnpm data:sync" }, () => {
+  test("acha por código", async () => {
+    const out = await searchCnaes("85201");
+    assert.ok(out.some((c) => c.codigo === "8520100"));
+  });
+
+  test("acha por descrição SEM acento", async () => {
+    // Ninguém digita "Educação" numa caixa de busca.
+    const out = await searchCnaes("educacao infantil");
+    assert.ok(out.length > 0, 'esperava resultados para "educacao infantil"');
+    assert.ok(out.every((c) => /educa/i.test(c.descricao)));
+  });
+
+  test("acha por descrição COM acento também", async () => {
+    const out = await searchCnaes("educação infantil");
+    assert.ok(out.length > 0);
+  });
+
+  test("código bate antes de descrição", async () => {
+    const out = await searchCnaes("8520");
+    assert.equal(out[0]?.codigo.startsWith("8520"), true);
+  });
+
+  test("busca vazia não devolve o dicionário inteiro", async () => {
+    assert.deepEqual(await searchCnaes(""), []);
+    assert.deepEqual(await searchCnaes("   "), []);
   });
 });

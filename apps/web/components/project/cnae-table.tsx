@@ -16,16 +16,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/empty-state";
-import { Input } from "@/components/ui/input";
+import { CnaePickerDialog } from "./cnae-picker-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -57,7 +49,6 @@ export function CnaeTable({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
-  const [code, setCode] = useState("");
 
   const picks = useQuery(trpc.discovery.picks.queryOptions({ projectId }));
   const invalidate = () =>
@@ -82,7 +73,6 @@ export function CnaeTable({ projectId }: { projectId: string }) {
   const addPick = useMutation({
     ...trpc.discovery.addPick.mutationOptions(),
     onSuccess: () => {
-      setCode("");
       setAdding(false);
       void invalidate();
     },
@@ -106,7 +96,7 @@ export function CnaeTable({ projectId }: { projectId: string }) {
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
               <Plus className="size-3.5" />
-              Código
+              Buscar CNAE
             </Button>
             <Button
               size="sm"
@@ -200,41 +190,12 @@ export function CnaeTable({ projectId }: { projectId: string }) {
         </CardContent>
       </Card>
 
-      <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Adicionar CNAE</DialogTitle>
-            <DialogDescription>
-              Código ou prefixo, só dígitos. Um prefixo de dois dígitos como{" "}
-              <code className="font-mono text-xs">85</code> pega toda a divisão.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            autoFocus
-            inputMode="numeric"
-            placeholder="8520100"
-            value={code}
-            className="font-mono"
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 7))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && code.length >= 2) {
-                addPick.mutate({ projectId, cnae: code });
-              }
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAdding(false)}>
-              Cancelar
-            </Button>
-            <Button
-              disabled={code.length < 2 || addPick.isPending}
-              onClick={() => addPick.mutate({ projectId, cnae: code })}
-            >
-              Adicionar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CnaePickerDialog
+        open={adding}
+        onOpenChange={setAdding}
+        pending={addPick.isPending}
+        onPick={(cnae) => addPick.mutate({ projectId, cnae })}
+      />
     </>
   );
 }

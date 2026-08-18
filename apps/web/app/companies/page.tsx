@@ -8,6 +8,7 @@ import { useTRPC } from "@/lib/trpc";
 import { useProject } from "@/lib/use-project";
 import type { CompanyRow } from "@/lib/api-types";
 import { errorMessage, nf } from "@/lib/format";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,7 +52,8 @@ function CompaniesPage() {
       ...(filters.uf.length === 2 ? { uf: filters.uf } : {}),
       ...(filters.flag ? { flag: filters.flag as "any" } : {}),
       ...(tri(filters.crawled) !== undefined ? { crawled: tri(filters.crawled) } : {}),
-      ...(tri(filters.scored) !== undefined ? { scored: tri(filters.scored) } : {}),
+      // "" is the default and means processadas; "todas" opts out entirely.
+      ...(filters.situacao === "todas" ? {} : { processed: filters.situacao !== "nao" }),
       order: filters.order,
       limit: 300,
     }),
@@ -146,6 +148,29 @@ function CompaniesPage() {
         shown={rows.length}
       />
 
+      {summary.data && summary.data.pending > 0 && filters.situacao === "" && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              <b className="tabular">{nf(summary.data.pending)}</b>{" "}
+              {summary.data.pending === 1
+                ? "empresa ainda não foi"
+                : "empresas ainda não foram"}{" "}
+              processada{summary.data.pending === 1 ? "" : "s"} e{" "}
+              {summary.data.pending === 1 ? "está" : "estão"} fora desta lista.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              onClick={() => setFilters({ ...filters, situacao: "nao" })}
+            >
+              Ver
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <CompanyTable
         rows={rows}
         loading={list.isLoading}
@@ -166,6 +191,14 @@ function CompaniesPage() {
           summary.data?.total === 0 ? (
             <Button size="sm" onClick={() => setAdding(true)}>
               Adicionar empresas da base
+            </Button>
+          ) : filters.situacao === "" && summary.data?.pending ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFilters({ ...filters, situacao: "nao" })}
+            >
+              Ver as {nf(summary.data.pending)} que faltam processar
             </Button>
           ) : undefined
         }

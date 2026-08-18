@@ -27,6 +27,16 @@ export const companiesRouter = router({
         flag: z.union([z.enum(LEAD_STATUSES), z.literal("any"), z.literal("none")]).optional(),
         crawled: z.boolean().optional(),
         scored: z.boolean().optional(),
+        /**
+         * "Processed" means it has a score.
+         *
+         * Scoring is the last stage and the pipeline only reaches it after
+         * crawling, so a score is proof the company went through. Requiring a
+         * *crawl* as well would permanently hide every company whose site could
+         * not be found — which is a real answer about a lead, not an unfinished
+         * one.
+         */
+        processed: z.boolean().optional(),
         order: z.enum(["score", "founded", "name"]).default("score"),
         limit: z.number().int().min(1).max(1000).default(200),
       })
@@ -73,6 +83,8 @@ export const companiesRouter = router({
         if (input.crawled === false && r.crawls) return false;
         if (input.scored === true && !r.scores) return false;
         if (input.scored === false && r.scores) return false;
+        if (input.processed === true && !r.scores) return false;
+        if (input.processed === false && r.scores) return false;
         return true;
       });
 
@@ -133,11 +145,15 @@ export const companiesRouter = router({
         )
         .where(eq(companies.projectId, input.projectId));
 
+      const total = Number(row?.total ?? 0);
+      const scored = Number(row?.scored ?? 0);
       return {
-        total: Number(row?.total ?? 0),
+        total,
         crawled: Number(row?.crawled ?? 0),
-        scored: Number(row?.scored ?? 0),
+        scored,
         flagged: Number(row?.flagged ?? 0),
+        // What the default filter is holding back. Never silently.
+        pending: Math.max(0, total - scored),
       };
     }),
 

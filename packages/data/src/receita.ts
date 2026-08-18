@@ -285,13 +285,29 @@ export async function describeCnae(code: string): Promise<string | null> {
   }`;
 }
 
-/** The official CNAE dictionary — what the model's suggestions get checked against. */
-export async function searchCnaes(q: string, limit = 25): Promise<{ codigo: string; descricao: string }[]> {
+/**
+ * The official CNAE dictionary — what the model's suggestions get checked
+ * against, and what the "add a CNAE" box searches.
+ *
+ * Accent-insensitive on purpose: nobody types "Educação" into a search box, and
+ * matching only the accented form makes the whole dictionary feel empty. The
+ * ordering puts code matches first so typing digits behaves like a code lookup
+ * and typing words behaves like a search.
+ */
+export async function searchCnaes(
+  q: string,
+  limit = 25
+): Promise<{ codigo: string; descricao: string }[]> {
+  const term = q.trim();
+  if (!term) return [];
   return query<{ codigo: string; descricao: string }>(
-    `SELECT codigo, descricao FROM cnaes
-     WHERE codigo LIKE ? OR lower(descricao) LIKE ?
-     ORDER BY codigo LIMIT ${Math.min(Math.max(limit, 1), 200)}`,
-    [`${q}%`, `%${q.toLowerCase()}%`]
+    `SELECT codigo, descricao
+     FROM cnaes
+     WHERE codigo LIKE ?
+        OR lower(strip_accents(descricao)) LIKE lower(strip_accents(?))
+     ORDER BY (codigo LIKE ?) DESC, codigo
+     LIMIT ${Math.min(Math.max(limit, 1), 200)}`,
+    [`${term}%`, `%${term}%`, `${term}%`]
   );
 }
 

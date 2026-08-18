@@ -23,7 +23,8 @@ export interface Filters {
   uf: string;
   flag: string;
   crawled: string;
-  scored: string;
+  /** "" = processadas (padrão) · "nao" = as que faltam · "todas" = tudo */
+  situacao: "" | "nao" | "todas";
   order: "score" | "founded" | "name";
 }
 
@@ -33,7 +34,7 @@ export const EMPTY_FILTERS: Filters = {
   uf: "",
   flag: "",
   crawled: "",
-  scored: "",
+  situacao: "",
   order: "score",
 };
 
@@ -44,7 +45,7 @@ export const EMPTY_FILTERS: Filters = {
  * here would show a badge for a filter the button does not contain.
  */
 function activeCount(f: Filters): number {
-  return [f.uf, f.flag, f.crawled, f.scored].filter(Boolean).length;
+  return [f.uf, f.flag, f.crawled, f.situacao].filter(Boolean).length;
 }
 
 /**
@@ -173,18 +174,20 @@ export function CompanyToolbar({
               </Select>
             </div>
             <div className="grid gap-1">
-              <Label className="text-xs">Nota</Label>
+              <Label className="text-xs">Situação</Label>
               <Select
-                value={filters.scored || "all"}
-                onValueChange={(v) => set("scored", v === "all" ? "" : v)}
+                value={filters.situacao || "processadas"}
+                onValueChange={(v) =>
+                  set("situacao", v === "processadas" ? "" : (v as Filters["situacao"]))
+                }
               >
                 <SelectTrigger className="h-8">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">todas</SelectItem>
-                  <SelectItem value="sim">pontuadas</SelectItem>
-                  <SelectItem value="nao">sem nota</SelectItem>
+                  <SelectItem value="processadas">processadas</SelectItem>
+                  <SelectItem value="nao">faltando processar</SelectItem>
+                  <SelectItem value="todas">todas</SelectItem>
                 </SelectContent>
               </Select>
             </div>

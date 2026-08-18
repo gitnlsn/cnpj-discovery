@@ -67,9 +67,6 @@ export function AddCompaniesSheet({
   const [foundedFrom, setFoundedFrom] = useState("");
   const [hasPhone, setHasPhone] = useState(true);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  // On by default: a company added and left alone shows nothing but dashes, and
-  // the point of adding it was to find out whether it is worth contacting.
-  const [process, setProcess] = useState(true);
 
   const picks = useQuery({
     ...trpc.discovery.picks.queryOptions({ projectId }),
@@ -287,17 +284,15 @@ export function AddCompaniesSheet({
             </ScrollArea>
 
             <SheetFooter className="flex-row flex-wrap items-center justify-between gap-3 border-t">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={process} onCheckedChange={(v) => setProcess(v === true)} />
-                <span>
-                  Visitar o site e pontuar em seguida
-                  <span className="ml-1.5 text-xs text-muted-foreground">
-                    grátis + gasta LLM · ~{Math.ceil(picked.size / 10)} req
-                  </span>
+              <p className="text-xs text-muted-foreground">
+                Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
+                a linha aparecer na lista.
+                <span className="ml-1">
+                  grátis + gasta LLM · ~{Math.ceil(picked.size / 10)} req
                 </span>
-              </label>
+              </p>
               <div className="flex items-center gap-3">
-                <span className="text-sm text-muted-foreground tabular">
+                <span className="tabular text-sm text-muted-foreground">
                   {picked.size} selecionada{picked.size === 1 ? "" : "s"}
                 </span>
                 <Button
@@ -306,7 +301,7 @@ export function AddCompaniesSheet({
                     add.mutate({ projectId, cnpjs: [...picked], sourcePeriod: "2026-08" })
                   }
                 >
-                  {add.isPending ? "Adicionando…" : `Adicionar ${picked.size}`}
+                  {add.isPending ? "Adicionando…" : `Adicionar e processar ${picked.size}`}
                 </Button>
               </div>
             </SheetFooter>
