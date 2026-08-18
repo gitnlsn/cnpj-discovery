@@ -24,7 +24,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -127,10 +126,10 @@ export function AddCompaniesDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[88svh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+        className="max-h-[92svh] gap-0 overflow-hidden p-0 sm:max-w-5xl"
         style={{ width: "min(72rem, 94vw)" }}
       >
-        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
+        <DialogHeader className="border-b px-6 py-4 pr-12">
           <DialogTitle>Adicionar empresas da base</DialogTitle>
           <DialogDescription>
             {reach.data ? (
@@ -154,7 +153,7 @@ export function AddCompaniesDialog({
           />
         ) : (
           <>
-            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b px-6 py-3">
+            <div className="flex flex-wrap items-end gap-2 border-b px-6 py-3">
               <div className="grid gap-1">
                 <Label className="text-xs">Ordem</Label>
                 <Select value={order} onValueChange={(v) => setOrder(v as Order)}>
@@ -210,7 +209,7 @@ export function AddCompaniesDialog({
               </Button>
             </div>
 
-            <ScrollArea className="max-h-[55vh] min-h-[14rem] flex-1">
+            <ScrollArea className="h-[52svh]">
               {results.isLoading ? (
                 <div className="space-y-1.5 p-4">
                   {Array.from({ length: 10 }, (_, i) => (
@@ -289,7 +288,14 @@ export function AddCompaniesDialog({
               )}
             </ScrollArea>
 
-            <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-3 border-t px-6 py-3 sm:justify-between">
+            {/*
+              A plain div, not DialogFooter. That component ships `-mx-4 -mb-4`
+              sized for the default `p-4` on DialogContent — with `p-0` here the
+              negative margins dragged it out of the container and it rendered
+              on top of the last rows. It also fights `px-6` with its own `p-4`.
+              It was only contributing a border and a flex row.
+            */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t bg-muted/50 px-6 py-3">
               <p className="text-xs text-muted-foreground">
                 Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
                 a linha aparecer na lista.
@@ -310,7 +316,7 @@ export function AddCompaniesDialog({
                   {add.isPending ? "Adicionando…" : `Adicionar e processar ${picked.size}`}
                 </Button>
               </div>
-            </DialogFooter>
+            </div>
           </>
         )}
       </DialogContent>
