@@ -125,10 +125,10 @@ export function AddCompaniesDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[92svh] gap-0 overflow-hidden p-0 sm:max-w-5xl"
+        className="flex max-h-[92svh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
         style={{ width: "min(72rem, 94vw)" }}
       >
-        <DialogHeader className="border-b px-6 py-4 pr-12">
+        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
           <DialogTitle>Adicionar empresas da base</DialogTitle>
           <DialogDescription>
             {reach.data ? (
@@ -152,7 +152,7 @@ export function AddCompaniesDialog({
           />
         ) : (
           <>
-            <div className="flex flex-wrap items-end gap-2 border-b px-6 py-3">
+            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b px-6 py-3">
               <div className="grid gap-1">
                 <Label className="text-xs">Ordem</Label>
                 <Select value={order} onValueChange={(v) => setOrder(v as Order)}>
@@ -221,7 +221,7 @@ export function AddCompaniesDialog({
                 description="Afrouxe a UF, a data de abertura, ou desmarque “só com telefone”."
               />
             ) : (
-              <Table className="table-dense" containerClassName="h-[52svh] overflow-auto">
+              <Table className="table-dense" containerClassName="min-h-0 flex-1 overflow-auto">
                 <TableHeader className="sticky top-0 z-10 bg-muted">
                   <TableRow>
                     <TableHead className="w-9" />
@@ -292,7 +292,7 @@ export function AddCompaniesDialog({
               on top of the last rows. It also fights `px-6` with its own `p-4`.
               It was only contributing a border and a flex row.
             */}
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t bg-muted/50 px-6 py-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-b-xl border-t bg-muted/50 px-6 py-3">
               <p className="min-w-0 flex-1 text-xs text-muted-foreground">
                 Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
                 a linha aparecer na lista.
