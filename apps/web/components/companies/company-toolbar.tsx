@@ -2,6 +2,7 @@
 
 import { Download, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import { LEAD_LABEL, LEAD_STATUSES } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CnaeCombobox } from "./cnae-combobox";
 
 export interface Filters {
@@ -41,20 +43,79 @@ export const EMPTY_FILTERS: Filters = {
 /**
  * How many of the *popover's* filters are narrowing the list.
  *
- * CNAE is deliberately excluded: it has its own visible control, so counting it
- * here would show a badge for a filter the button does not contain.
+ * CNAE is excluded: it has its own visible control, so counting it here would
+ * put a badge on a button that does not contain it.
  */
 function activeCount(f: Filters): number {
   return [f.uf, f.flag, f.crawled, f.situacao].filter(Boolean).length;
 }
 
+/** A labelled control. Every input in the toolbar says what it is. */
+function Field({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("grid gap-1", className)}>
+      <Label
+        htmlFor={htmlFor}
+        className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
+      >
+        {label}
+      </Label>
+      {children}
+    </div>
+  );
+}
+
 /**
- * Search, filters, and the two things you do to the whole list.
+ * A row of options, all visible, one click each.
  *
- * The filters collapse into a popover instead of sitting as seven loose
- * controls across the page — that row was as tall as three rows of data and
- * pushed the table below the fold.
+ * These used to be `Select`s inside the filter popover — a dropdown opening
+ * inside a popover escapes its boundary and renders over the edge. For two or
+ * three choices a dropdown also hides the options and costs two clicks, so
+ * showing them is both better looking and faster.
  */
+function Choices({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      value={value || "__all__"}
+      // Radix clears the value when the active item is re-clicked; keep the
+      // current one rather than dropping into an unrepresentable empty state.
+      onValueChange={(v) => onChange(v === "__all__" ? "" : v || value)}
+      className="flex flex-wrap justify-start gap-1"
+      variant="outline"
+      size="sm"
+    >
+      {options.map((o) => (
+        <ToggleGroupItem
+          key={o.value || "__all__"}
+          value={o.value || "__all__"}
+          className="h-7 rounded-md border px-2 text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+        >
+          {o.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
 export function CompanyToolbar({
   projectId,
   filters,
@@ -77,159 +138,144 @@ export function CompanyToolbar({
   const active = activeCount(filters);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={filters.q}
-          onChange={(e) => set("q", e.target.value)}
-          placeholder="nome ou CNPJ"
-          className="h-8 w-56 pl-8"
-        />
-        {filters.q && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute right-0.5 top-1/2 size-7 -translate-y-1/2"
-            onClick={() => set("q", "")}
-            aria-label="Limpar busca"
-          >
-            <X className="size-3.5" />
-          </Button>
-        )}
-      </div>
+    <div className="flex flex-wrap items-end gap-3">
+      <Field label="Buscar" htmlFor="f-q">
+        <div className="relative">
+          <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="f-q"
+            value={filters.q}
+            onChange={(e) => set("q", e.target.value)}
+            placeholder="nome ou CNPJ"
+            className="h-8 w-56 pl-8"
+          />
+          {filters.q && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-1/2 right-0.5 size-7 -translate-y-1/2"
+              onClick={() => set("q", "")}
+              aria-label="Limpar busca"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </Field>
 
-      <div className="w-[19rem]">
+      <Field label="CNAE" className="w-[19rem]">
         <CnaeCombobox
           projectId={projectId}
           value={filters.cnae}
           onChange={(v) => set("cnae", v)}
         />
-      </div>
+      </Field>
 
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="h-8">
-            <SlidersHorizontal className="size-3.5" />
-            Filtros
+      <Field label="Filtros">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8">
+              <SlidersHorizontal className="size-3.5" />
+              {active > 0 ? `${active} ativo${active > 1 ? "s" : ""}` : "nenhum"}
+              {active > 0 && (
+                <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
+                  {active}
+                </Badge>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 space-y-4">
+            <Field label="Situação">
+              <Choices
+                value={filters.situacao}
+                onChange={(v) => set("situacao", v as Filters["situacao"])}
+                options={[
+                  { value: "", label: "processadas" },
+                  { value: "nao", label: "faltando" },
+                  { value: "todas", label: "todas" },
+                ]}
+              />
+            </Field>
+
+            <Field label="Site">
+              <Choices
+                value={filters.crawled}
+                onChange={(v) => set("crawled", v)}
+                options={[
+                  { value: "", label: "todas" },
+                  { value: "sim", label: "lido" },
+                  { value: "nao", label: "não lido" },
+                ]}
+              />
+            </Field>
+
+            <Field label="Marcação">
+              <Choices
+                value={filters.flag}
+                onChange={(v) => set("flag", v)}
+                options={[
+                  { value: "", label: "todas" },
+                  { value: "none", label: "não marcadas" },
+                  { value: "any", label: "marcadas" },
+                  ...LEAD_STATUSES.map((st) => ({ value: st, label: LEAD_LABEL[st] })),
+                ]}
+              />
+            </Field>
+
+            <Field label="UF" htmlFor="f-uf">
+              <Input
+                id="f-uf"
+                value={filters.uf}
+                maxLength={2}
+                onChange={(e) => set("uf", e.target.value.toUpperCase())}
+                placeholder="todas"
+                className="h-8 w-20"
+              />
+            </Field>
+
             {active > 0 && (
-              <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
-                {active}
-              </Badge>
+              <>
+                <Separator />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full"
+                  onClick={() =>
+                    onChange({
+                      ...EMPTY_FILTERS,
+                      q: filters.q,
+                      order: filters.order,
+                      cnae: filters.cnae,
+                    })
+                  }
+                >
+                  Limpar filtros
+                </Button>
+              </>
             )}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 space-y-3">
-          <div className="grid gap-1">
-            <Label htmlFor="f-uf" className="text-xs">
-              UF
-            </Label>
-            <Input
-              id="f-uf"
-              value={filters.uf}
-              maxLength={2}
-              onChange={(e) => set("uf", e.target.value.toUpperCase())}
-              placeholder="SP"
-              className="h-8 w-20"
-            />
-          </div>
+          </PopoverContent>
+        </Popover>
+      </Field>
 
-          <div className="grid gap-1">
-            <Label className="text-xs">Marcação</Label>
-            <Select
-              value={filters.flag || "all"}
-              onValueChange={(v) => set("flag", v === "all" ? "" : v)}
-            >
-              <SelectTrigger className="h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">todas</SelectItem>
-                <SelectItem value="none">não marcadas</SelectItem>
-                <SelectItem value="any">marcadas (qualquer)</SelectItem>
-                {LEAD_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {LEAD_LABEL[s]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1">
-              <Label className="text-xs">Site</Label>
-              <Select
-                value={filters.crawled || "all"}
-                onValueChange={(v) => set("crawled", v === "all" ? "" : v)}
-              >
-                <SelectTrigger className="h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">todas</SelectItem>
-                  <SelectItem value="sim">lido</SelectItem>
-                  <SelectItem value="nao">não lido</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">Situação</Label>
-              <Select
-                value={filters.situacao || "processadas"}
-                onValueChange={(v) =>
-                  set("situacao", v === "processadas" ? "" : (v as Filters["situacao"]))
-                }
-              >
-                <SelectTrigger className="h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="processadas">processadas</SelectItem>
-                  <SelectItem value="nao">faltando processar</SelectItem>
-                  <SelectItem value="todas">todas</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {active > 0 && (
-            <>
-              <Separator />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                onClick={() =>
-                  onChange({
-                    ...EMPTY_FILTERS,
-                    q: filters.q,
-                    order: filters.order,
-                    cnae: filters.cnae,
-                  })
-                }
-              >
-                Limpar filtros
-              </Button>
-            </>
-          )}
-        </PopoverContent>
-      </Popover>
-
-      <Select value={filters.order} onValueChange={(v) => set("order", v as Filters["order"])}>
-        <SelectTrigger className="h-8 w-40">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="score">maior nota</SelectItem>
-          <SelectItem value="founded">mais novas</SelectItem>
-          <SelectItem value="name">nome</SelectItem>
-        </SelectContent>
-      </Select>
+      <Field label="Ordenar por">
+        <Select
+          value={filters.order}
+          onValueChange={(v) => set("order", v as Filters["order"])}
+        >
+          <SelectTrigger className="h-8 w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="score">maior nota</SelectItem>
+            <SelectItem value="founded">mais novas</SelectItem>
+            <SelectItem value="name">nome</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
 
       <div className="flex-1" />
 
-      <span className="text-xs text-muted-foreground tabular">
+      <span className="tabular pb-2 text-xs text-muted-foreground">
         {shown}
         {total != null && total !== shown ? ` de ${total}` : ""}
       </span>

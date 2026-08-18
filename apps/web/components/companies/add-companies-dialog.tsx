@@ -39,6 +39,15 @@ import {
 type Order = "founded-desc" | "founded-asc" | "name" | "capital-desc";
 
 /**
+ * How many internal pages to read beyond the homepage when adding.
+ *
+ * The deepest the crawler goes. It only follows links that look like contato,
+ * sobre, serviços, produtos, planos or preços — so this is five useful pages,
+ * not five random ones, and the per-host delay still applies.
+ */
+const DEEP_CRAWL = 5;
+
+/**
  * Search the Receita base and pull companies into the project.
  *
  * A centred modal, not a panel wedged into the page. This is the only place
@@ -102,7 +111,7 @@ export function AddCompaniesDialog({
       void qc.invalidateQueries();
       const n = r.added;
       if (process && n > 0) {
-        runPipeline.mutate({ projectId, cnpjs: vars.cnpjs, depth: 0 });
+        runPipeline.mutate({ projectId, cnpjs: vars.cnpjs, depth: DEEP_CRAWL });
         toast.success(`${n} adicionada${n === 1 ? "" : "s"} · visitando os sites e pontuando`);
       } else {
         toast.success(`${n} empresa${n === 1 ? "" : "s"} adicionada${n === 1 ? "" : "s"}.`);
@@ -294,8 +303,8 @@ export function AddCompaniesDialog({
             */}
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-b-xl border-t bg-muted/50 px-6 py-3">
               <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
-                a linha aparecer na lista.
+                Ao adicionar, o site de cada uma é lido a fundo (home + até {DEEP_CRAWL} páginas
+                internas) e a empresa é pontuada — é o que faz a linha aparecer na lista.
                 <span className="ml-1">
                   grátis + gasta LLM · ~{Math.ceil(picked.size / 10)} req
                 </span>
