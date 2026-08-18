@@ -5,6 +5,7 @@ import { enrichmentRouter } from "./enrichment";
 import { scoringRouter } from "./scoring";
 import { jobsRouter } from "./jobs";
 import { leadsRouter } from "./leads";
+import { companiesRouter } from "./companies";
 
 export const appRouter = router({
   project: projectRouter,
@@ -13,6 +14,7 @@ export const appRouter = router({
   scoring: scoringRouter,
   jobs: jobsRouter,
   leads: leadsRouter,
+  companies: companiesRouter,
 });
 
 export type AppRouter = typeof appRouter;

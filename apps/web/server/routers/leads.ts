@@ -46,7 +46,12 @@ export const leadsRouter = router({
         ? await ctx.db
             .select()
             .from(contacts)
-            .where(inArray(contacts.cnpj, rows.map((r) => r.leads.cnpj)))
+            .where(
+              inArray(
+                contacts.cnpj,
+                rows.map((r) => r.leads.cnpj)
+              )
+            )
         : [];
 
       return rows.map((r) => ({

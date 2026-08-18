@@ -20,10 +20,7 @@ const minimal = {
 };
 
 test("a spec with no valid axis is rejected, not silently emptied", () => {
-  assert.throws(
-    () => parseProjectSpec({ ...minimal, rubric: { axes: [] } }),
-    SpecError
-  );
+  assert.throws(() => parseProjectSpec({ ...minimal, rubric: { axes: [] } }), SpecError);
 });
 
 test("an axis missing an anchor level is dropped", () => {
@@ -101,7 +98,15 @@ test("tier is derived from the scores, never supplied", () => {
 });
 
 test("probes distinguish 'looked and did not find' from 'never looked'", () => {
-  const probes = [{ key: "portal", label: "Portal", terms: ["portal do aluno"], meaning: "positive" as const, weight: 1 }];
+  const probes = [
+    {
+      key: "portal",
+      label: "Portal",
+      terms: ["portal do aluno"],
+      meaning: "positive" as const,
+      weight: 1,
+    },
+  ];
   // No text at all: empty object, NOT {portal: false}.
   assert.deepEqual(runProbes(probes, null), {});
   assert.deepEqual(runProbes(probes, "   "), {});
@@ -111,9 +116,13 @@ test("probes distinguish 'looked and did not find' from 'never looked'", () => {
 });
 
 test("probe matching ignores accents and respects word boundaries", () => {
-  const probes = [{ key: "pratico", label: "x", terms: ["prático"], meaning: "positive" as const, weight: 1 }];
+  const probes = [
+    { key: "pratico", label: "x", terms: ["prático"], meaning: "positive" as const, weight: 1 },
+  ];
   assert.deepEqual(runProbes(probes, "curso pratico de..."), { pratico: true });
-  const ia = [{ key: "ia", label: "x", terms: ["ia"], meaning: "positive" as const, weight: 1 }];
+  const ia = [
+    { key: "ia", label: "x", terms: ["ia"], meaning: "positive" as const, weight: 1 },
+  ];
   assert.deepEqual(runProbes(ia, "nossa familia de produtos"), { ia: false });
 });
 
@@ -137,7 +146,10 @@ test("field names leaking into recommendations are refused", () => {
       ],
     },
   });
-  assert.deepEqual(parsed.rubric.recommendations.map((r) => r.value), ["abordar"]);
+  assert.deepEqual(
+    parsed.rubric.recommendations.map((r) => r.value),
+    ["abordar"]
+  );
 });
 
 test("a wholly degenerate recommendation list falls back to a usable default", () => {
@@ -148,5 +160,8 @@ test("a wholly degenerate recommendation list falls back to a usable default", (
       recommendations: [{ value: "hookbad", label: "x", when: "y" }],
     },
   });
-  assert.deepEqual(parsed.rubric.recommendations.map((r) => r.value), ["abordar", "descartar"]);
+  assert.deepEqual(
+    parsed.rubric.recommendations.map((r) => r.value),
+    ["abordar", "descartar"]
+  );
 });

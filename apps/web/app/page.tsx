@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc";
 import { useProject, ErrorBox } from "@/components/bits";
+import { CnaePanel } from "@/components/CnaePanel";
 import type { ProjectSpec, Axis, Probe } from "@cnpj/core";
 
 function slugify(s: string): string {
@@ -31,26 +32,37 @@ function ProjectTab() {
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: trpc.project.list.queryKey() });
-    if (projectId) void qc.invalidateQueries({ queryKey: trpc.project.get.queryKey({ id: projectId }) });
+    if (projectId)
+      void qc.invalidateQueries({ queryKey: trpc.project.get.queryKey({ id: projectId }) });
   };
 
   const create = useMutation({
     ...trpc.project.create.mutationOptions(),
-    onSuccess: (r) => { setCreating(false); invalidate(); setProject(r.id); },
+    onSuccess: (r) => {
+      setCreating(false);
+      invalidate();
+      setProject(r.id);
+    },
   });
-  const update = useMutation({ ...trpc.project.update.mutationOptions(), onSuccess: invalidate });
-  const compile = useMutation({ ...trpc.project.compile.mutationOptions(), onSuccess: invalidate });
+  const update = useMutation({
+    ...trpc.project.update.mutationOptions(),
+    onSuccess: invalidate,
+  });
+  const compile = useMutation({
+    ...trpc.project.compile.mutationOptions(),
+    onSuccess: invalidate,
+  });
 
   const project = current.data;
   const spec = project?.spec ?? null;
 
   return (
     <>
-      <h1>Projeto e perfil de cliente ideal</h1>
+      <h1>Projetos</h1>
       <p className="lede">
-        Descreva o que você vende e quem é o cliente ideal, em português corrido. O
-        modelo transforma isso em filtros e numa rubrica de pontuação — e mostra
-        quais critérios ele <b>não</b> conseguiu transformar em filtro.
+        Descreva o que você vende e quem é o cliente ideal, em português corrido. O modelo
+        transforma isso em filtros e numa rubrica de pontuação — e mostra quais critérios ele{" "}
+        <b>não</b> conseguiu transformar em filtro.
       </p>
 
       <div className="panel">
@@ -63,7 +75,9 @@ function ProjectTab() {
           >
             <option value="">— escolha um projeto —</option>
             {(list.data ?? []).map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
             ))}
           </select>
           <button className="btn" onClick={() => setCreating((v) => !v)}>
@@ -78,7 +92,8 @@ function ProjectTab() {
           <label className="field">
             <span>Nome</span>
             <input
-              className="inp" value={draft.name}
+              className="inp"
+              value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="Sites para escolas particulares"
             />
@@ -87,7 +102,8 @@ function ProjectTab() {
             <span>O que você vende</span>
             <small>Concreto. O que o cliente recebe e o que muda para ele.</small>
             <textarea
-              className="inp" value={draft.description}
+              className="inp"
+              value={draft.description}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               placeholder="Site institucional com portal do aluno, entregue em duas semanas..."
             />
@@ -96,7 +112,8 @@ function ProjectTab() {
             <span>Perfil de cliente ideal (ICP)</span>
             <small>Do jeito que você explicaria para alguém. Critério por critério.</small>
             <textarea
-              className="inp" value={draft.icpText}
+              className="inp"
+              value={draft.icpText}
               onChange={(e) => setDraft({ ...draft, icpText: e.target.value })}
               placeholder="escolas particulares de ensino médio, não-MEI, com mais de 50 alunos..."
             />
@@ -117,14 +134,16 @@ function ProjectTab() {
             <label className="field">
               <span>O que você vende</span>
               <textarea
-                className="inp" defaultValue={project.description}
+                className="inp"
+                defaultValue={project.description}
                 onBlur={(e) => update.mutate({ id: project.id, description: e.target.value })}
               />
             </label>
             <label className="field">
               <span>Perfil de cliente ideal (ICP)</span>
               <textarea
-                className="inp" defaultValue={project.icpText}
+                className="inp"
+                defaultValue={project.icpText}
                 onBlur={(e) => update.mutate({ id: project.id, icpText: e.target.value })}
               />
             </label>
@@ -148,6 +167,7 @@ function ProjectTab() {
           </div>
 
           {spec && <SpecPanel spec={spec} />}
+          <CnaePanel projectId={project.id} />
         </>
       )}
     </>
@@ -169,7 +189,11 @@ function SpecPanel({ spec }: { spec: ProjectSpec }) {
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
-            <tr><th>situação</th><th>critério</th><th>onde entrou</th></tr>
+            <tr>
+              <th>situação</th>
+              <th>critério</th>
+              <th>onde entrou</th>
+            </tr>
           </thead>
           <tbody>
             {spec.icpCoverage.map((c, i) => (
@@ -184,7 +208,11 @@ function SpecPanel({ spec }: { spec: ProjectSpec }) {
               </tr>
             ))}
             {spec.icpCoverage.length === 0 && (
-              <tr><td colSpan={3} className="muted">nenhum critério registrado</td></tr>
+              <tr>
+                <td colSpan={3} className="muted">
+                  nenhum critério registrado
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
@@ -192,16 +220,22 @@ function SpecPanel({ spec }: { spec: ProjectSpec }) {
 
       <h2>Rubrica</h2>
       <div className="panel">
-        <p style={{ marginTop: 0 }}><b>{spec.summary}</b></p>
+        <p style={{ marginTop: 0 }}>
+          <b>{spec.summary}</b>
+        </p>
         <p className="muted" style={{ margin: "4px 0" }}>
           Quem decide: {spec.buyer} · Problema: {spec.problem}
         </p>
         {spec.rubric.axes.map((a: Axis) => (
           <details key={a.key} style={{ marginTop: 8 }}>
-            <summary><b>{a.label}</b> — {a.question}</summary>
+            <summary>
+              <b>{a.label}</b> — {a.question}
+            </summary>
             <ul style={{ margin: "6px 0", paddingLeft: 20 }}>
               {(["5", "4", "3", "2", "1"] as const).map((lvl) => (
-                <li key={lvl}><code>{lvl}</code> {a.anchors[lvl]}</li>
+                <li key={lvl}>
+                  <code>{lvl}</code> {a.anchors[lvl]}
+                </li>
               ))}
             </ul>
           </details>

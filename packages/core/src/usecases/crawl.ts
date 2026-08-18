@@ -57,12 +57,36 @@ const FREE_BUILDERS = [
  * about a website; an address at any other domain usually IS their domain.
  */
 const FREE_MAIL = new Set([
-  "gmail.com", "googlemail.com", "hotmail.com", "hotmail.com.br", "outlook.com",
-  "outlook.com.br", "live.com", "msn.com", "yahoo.com", "yahoo.com.br",
-  "ymail.com", "icloud.com", "me.com", "aol.com", "protonmail.com", "proton.me",
-  "uol.com.br", "bol.com.br", "terra.com.br", "ig.com.br", "globo.com",
-  "globomail.com", "r7.com", "oi.com.br", "zipmail.com.br", "superig.com.br",
-  "brturbo.com.br", "pop.com.br", "click21.com.br", "veloxmail.com.br",
+  "gmail.com",
+  "googlemail.com",
+  "hotmail.com",
+  "hotmail.com.br",
+  "outlook.com",
+  "outlook.com.br",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "yahoo.com.br",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "aol.com",
+  "protonmail.com",
+  "proton.me",
+  "uol.com.br",
+  "bol.com.br",
+  "terra.com.br",
+  "ig.com.br",
+  "globo.com",
+  "globomail.com",
+  "r7.com",
+  "oi.com.br",
+  "zipmail.com.br",
+  "superig.com.br",
+  "brturbo.com.br",
+  "pop.com.br",
+  "click21.com.br",
+  "veloxmail.com.br",
 ]);
 
 /**
@@ -76,7 +100,8 @@ const FREE_MAIL = new Set([
  * Mistyped consumer providers. These resolve to parking or spam pages and
  * would otherwise be scored as though the business owned the domain.
  */
-const TYPO_MAIL = /^(gmai|gmial|gmail|hotmai|hotmial|outlok|yaho|uol|bol|terra|ig|globo)\.(com|com\.br)$/;
+const TYPO_MAIL =
+  /^(gmai|gmial|gmail|hotmai|hotmial|outlok|yaho|uol|bol|terra|ig|globo)\.(com|com\.br)$/;
 
 /**
  * Brazilian accounting-office markers — the classic wrong attribution, because
@@ -88,7 +113,8 @@ const TYPO_MAIL = /^(gmai|gmial|gmail|hotmai|hotmial|outlok|yaho|uol|bol|terra|i
  * unmistakably an accounting firm, so the unambiguous full words are matched
  * anywhere in the domain.
  */
-const ACCOUNTANT = /(^|[.-])(contab|contabil|assessoria|escritorio|escrit|conta[bd]|fiscal|tributa)/;
+const ACCOUNTANT =
+  /(^|[.-])(contab|contabil|assessoria|escritorio|escrit|conta[bd]|fiscal|tributa)/;
 const ACCOUNTANT_WORD = /(contabilidade|contabeis|contadores|contabil)/;
 
 export function websiteFromEmail(email: string | null): string | null {
@@ -96,7 +122,10 @@ export function websiteFromEmail(email: string | null): string | null {
   const at = email.lastIndexOf("@");
   if (at < 0) return null;
 
-  const domain = email.slice(at + 1).trim().toLowerCase();
+  const domain = email
+    .slice(at + 1)
+    .trim()
+    .toLowerCase();
   if (!domain || !domain.includes(".") || domain.length < 5) return null;
   if (FREE_MAIL.has(domain) || TYPO_MAIL.test(domain)) return null;
   if (domain.endsWith(".gov.br")) return null;
@@ -136,7 +165,6 @@ function detectPlatform(html: string, generator: string | null): string | null {
   return null;
 }
 
-
 // ------------------------------------------------------------------ signals
 
 export interface SiteSignals {
@@ -172,12 +200,27 @@ export interface SiteSignals {
 
 function emptySignals(url: string | null): SiteSignals {
   return {
-    websiteUrl: url, finalUrl: null, httpStatus: null, error: null,
-    hasWebsite: Boolean(url), isDead: false, isHttps: false,
-    isLinkHub: false, isFreeBuilder: false,
-    hasViewport: null, hasContactPath: null, hasWaLink: null, hasForm: null,
-    generator: null, platform: null, footerYear: null, title: null,
-    igHandle: null, sitePhone: null, textExcerpt: null, pagesFetched: 0,
+    websiteUrl: url,
+    finalUrl: null,
+    httpStatus: null,
+    error: null,
+    hasWebsite: Boolean(url),
+    isDead: false,
+    isHttps: false,
+    isLinkHub: false,
+    isFreeBuilder: false,
+    hasViewport: null,
+    hasContactPath: null,
+    hasWaLink: null,
+    hasForm: null,
+    generator: null,
+    platform: null,
+    footerYear: null,
+    title: null,
+    igHandle: null,
+    sitePhone: null,
+    textExcerpt: null,
+    pagesFetched: 0,
     probes: {},
   };
 }
@@ -216,7 +259,8 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
     platform: detectPlatform(html, generator),
     footerYear: years.length ? Math.max(...years) : null,
     title: titleMatch?.[1]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? null,
-    igHandle: igMatch?.[1] && !["p", "reel", "explore"].includes(igMatch[1]) ? igMatch[1] : null,
+    igHandle:
+      igMatch?.[1] && !["p", "reel", "explore"].includes(igMatch[1]) ? igMatch[1] : null,
     sitePhone: phoneFromHtml(html),
     isHttps: finalUrl.startsWith("https://"),
     textExcerpt: extractText(html),
@@ -361,11 +405,7 @@ export interface CrawlOptions {
   ignoreRobots?: boolean;
 }
 
-async function fetchRobots(
-  http: HttpPort,
-  origin: string,
-  timeoutMs: number
-): Promise<Robots> {
+async function fetchRobots(http: HttpPort, origin: string, timeoutMs: number): Promise<Robots> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -385,7 +425,8 @@ async function fetchRobots(
 }
 
 /** Internal links worth a second look, in priority order. */
-const INTERESTING = /(contato|fale-conosco|sobre|quem-somos|servicos|serviços|produtos|planos|precos|preços)/i;
+const INTERESTING =
+  /(contato|fale-conosco|sobre|quem-somos|servicos|serviços|produtos|planos|precos|preços)/i;
 
 function internalLinks(html: string, base: string, limit: number): string[] {
   const out: string[] = [];
@@ -552,13 +593,16 @@ export async function mapLimit<T, R>(
 ): Promise<R[]> {
   const out = new Array<R>(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, async () => {
-    for (;;) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]!, i);
+  const workers = Array.from(
+    { length: Math.min(Math.max(limit, 1), items.length) },
+    async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]!, i);
+      }
     }
-  });
+  );
   await Promise.all(workers);
   return out;
 }

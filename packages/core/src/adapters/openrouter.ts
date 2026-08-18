@@ -252,7 +252,8 @@ export function createOpenRouterLlm(opts: OpenRouterOptions): LlmPort {
         structured: (m.supported_parameters ?? []).includes("structured_outputs"),
       }))
       .sort(
-        (a, b) => Number(b.structured) - Number(a.structured) || b.contextLength - a.contextLength
+        (a, b) =>
+          Number(b.structured) - Number(a.structured) || b.contextLength - a.contextLength
       );
   }
 

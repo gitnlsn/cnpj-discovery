@@ -14,8 +14,10 @@ export function llm(): LlmPort | null {
 
   const models: Partial<Record<Task, string>> = {};
   if (process.env.OPENROUTER_MODEL_SCORE) models.score = process.env.OPENROUTER_MODEL_SCORE;
-  if (process.env.OPENROUTER_MODEL_COMPILE) models.compile = process.env.OPENROUTER_MODEL_COMPILE;
-  if (process.env.OPENROUTER_MODEL_SUGGEST) models.suggest = process.env.OPENROUTER_MODEL_SUGGEST;
+  if (process.env.OPENROUTER_MODEL_COMPILE)
+    models.compile = process.env.OPENROUTER_MODEL_COMPILE;
+  if (process.env.OPENROUTER_MODEL_SUGGEST)
+    models.suggest = process.env.OPENROUTER_MODEL_SUGGEST;
 
   return createOpenRouterLlm({ apiKey, models });
 }

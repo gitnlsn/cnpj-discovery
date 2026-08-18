@@ -57,7 +57,9 @@ export const cnaePicks = sqliteTable(
     reachRecent: integer("reach_recent").notNull().default(0),
     /** Why the model picked it — shown next to the number so both can be judged. */
     rationale: text("rationale"),
-    suggestedBy: text("suggested_by", { enum: ["llm", "human"] }).notNull().default("llm"),
+    suggestedBy: text("suggested_by", { enum: ["llm", "human"] })
+      .notNull()
+      .default("llm"),
     chosen: integer("chosen", { mode: "boolean" }).notNull().default(false),
     checkedAt: text("checked_at").notNull().default(now),
   },

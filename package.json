@@ -17,11 +17,16 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "typescript-eslint": "^8.67.0",
+    "prettier": "^3.9.6"
   }
 }

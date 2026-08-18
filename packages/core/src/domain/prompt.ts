@@ -85,7 +85,10 @@ export function buildRubricPrompt(spec: ProjectSpec): string {
   }
 
   if (spec.rubric.notes.length) {
-    parts.push(`Heurísticas específicas deste produto:\n` + spec.rubric.notes.map((n) => `- ${n}`).join("\n"));
+    parts.push(
+      `Heurísticas específicas deste produto:\n` +
+        spec.rubric.notes.map((n) => `- ${n}`).join("\n")
+    );
   }
 
   parts.push(
@@ -107,7 +110,9 @@ export function buildRubricPrompt(spec: ProjectSpec): string {
 
   parts.push(
     `recommendation — qual caminho seguir com este lead:\n` +
-      spec.rubric.recommendations.map((r) => `  "${r.value}" (${r.label}) quando ${r.when}`).join("\n")
+      spec.rubric.recommendations
+        .map((r) => `  "${r.value}" (${r.label}) quando ${r.when}`)
+        .join("\n")
   );
 
   // Offer-specific hook examples are appended AFTER the shared rules, so they
@@ -115,7 +120,11 @@ export function buildRubricPrompt(spec: ProjectSpec): string {
   const hookExtras: string[] = [];
   for (const bad of spec.rubric.hookBad) hookExtras.push(`  PROIBIDO: ${bad}`);
   for (const good of spec.rubric.hookGood) hookExtras.push(`  OK:       ${good}`);
-  parts.push(hookExtras.length ? `${HOOK_RULES}\n\nPara este produto:\n${hookExtras.join("\n")}` : HOOK_RULES);
+  parts.push(
+    hookExtras.length
+      ? `${HOOK_RULES}\n\nPara este produto:\n${hookExtras.join("\n")}`
+      : HOOK_RULES
+  );
 
   parts.push(ADVICE_RULES);
   parts.push(OUTPUT_RULES);

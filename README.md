@@ -1,12 +1,18 @@
 # cnpj-discovery
 
-Da ideia ao lead qualificado, com dados abertos da Receita Federal. Quatro abas, na
-ordem em que o trabalho acontece:
+Da ideia ao lead qualificado, com dados abertos da Receita Federal.
 
-1. **Projeto** — o que você vende e o perfil de cliente ideal (ICP)
-2. **Descoberta** — o modelo sugere CNAEs; você escolhe; sai a lista de empresas
-3. **Enriquecimento** — descoberta de site e crawl, um botão por empresa
-4. **Pontuação** — o modelo pontua, escreve o gancho e o conselho
+Duas abas, seguindo o modelo de dados e não o fluxo de processamento:
+
+- **Projetos** — o que você vende, o perfil de cliente ideal (ICP), a rubrica
+  compilada e os CNAEs alvo. Um CNAE só existe dentro de um projeto
+  (`cnae_picks` é chaveado por `project_id`), então mora aqui.
+- **Empresas** — todas as empresas do projeto, com tudo que se sabe sobre cada
+  uma. Enriquecer, pontuar e marcar são **verbos aplicados a uma seleção**:
+  marque as linhas e rode a rotina em cima delas.
+
+Dividir por etapa dava quatro telas mostrando as mesmas linhas em estados
+diferentes, e obrigava a navegar para trocar de verbo.
 
 **Custo: R$ 0.** Os dados da Receita são públicos e os modelos padrão do OpenRouter são
 gratuitos. A única etapa que gastaria dinheiro — Google Places — vem desligada.
@@ -24,7 +30,7 @@ pnpm dev                  # http://localhost:3200
 ## Como a base funciona
 
 Não existe API gratuita que busque empresas por CNAE. Todas as que existem
-(CNPJá, CNPJ.ws, NextAPI) cobram pela *busca*; as gratuitas consultam **um** CNPJ
+(CNPJá, CNPJ.ws, NextAPI) cobram pela _busca_; as gratuitas consultam **um** CNPJ
 por vez, o que não serve para descobrir nada. Então a base é local:
 
 ```
@@ -40,21 +46,21 @@ O resultado é uma "API" com filtros e ordenação de verdade, rodando no proces
 ```ts
 listCompanies({
   filters: { cnae: ["8520100"], uf: ["SP"], hasPhone: true },
-  order: "founded-desc",   // ORDER BY data_inicio_atividade DESC
+  order: "founded-desc", // ORDER BY data_inicio_atividade DESC
   limit: 50,
-})
+});
 ```
 
 Medido numa carga real (período 2026-08, parte 0):
 
-| | |
-|---|---|
-| linhas lidas | 30.008.725 |
+|                                       |                        |
+| ------------------------------------- | ---------------------- |
+| linhas lidas                          | 30.008.725             |
 | **estabelecimentos ativos guardados** | **11.993.902** (40,0%) |
-| com telefone | 97,3% |
-| Parquet em disco | **944 MB** |
-| tempo total | 14 min |
-| consulta típica | 12–50 ms |
+| com telefone                          | 97,3%                  |
+| Parquet em disco                      | **944 MB**             |
+| tempo total                           | 14 min                 |
+| consulta típica                       | 12–50 ms               |
 
 Para comparação, o projeto anterior gastava **2,96 GB de Postgres para 2,1 milhões**
 de empresas de seis CNAEs. Aqui é o país inteiro em menos espaço, sem Docker e sem
@@ -66,10 +72,10 @@ A Receita publica `Estabelecimentos0.zip` … `Estabelecimentos9.zip`. É tentad
 tratá-las como um sorteio uniforme e testar com uma parte pequena. **Não são.**
 A parte 0 tem 2 GB contra ~330 MB das outras, e é onde estão as empresas recentes:
 
-| | parte 1 | parte 0 |
-|---|---|---|
-| abertas em 2025 | 27 | 1.986.212 |
-| abertas em 2026 | 14 | 1.683.032 |
+|                            | parte 1          | parte 0      |
+| -------------------------- | ---------------- | ------------ |
+| abertas em 2025            | 27               | 1.986.212    |
+| abertas em 2026            | 14               | 1.683.032    |
 | última abertura com volume | **maio de 2021** | mês corrente |
 
 Uma lista "mais novas primeiro" construída sobre as partes 1-9 devolve empresas de
@@ -93,15 +99,15 @@ com ele, 70%. É a diferença entre uma base contatável e uma inútil.
 
 **O modelo inventa CNAE.** Não é um talvez. Pedindo "escolas de ensino médio", o
 compilador respondeu `8599` e escreveu "(ensino médio)" ao lado. `8599` é
-*"Formação de condutores; Cursos de pilotagem; …"* — ensino médio é `8520100`. Toda
+_"Formação de condutores; Cursos de pilotagem; …"_ — ensino médio é `8520100`. Toda
 sugestão é resolvida contra a tabela oficial antes de aparecer, e a tela mostra três
 situações diferentes:
 
-| | |
-|---|---|
-| `existe` | o código existe e tem empresas |
-| `sem empresas` | o código existe, mas nada casa com os outros filtros |
-| `código inventado` | não existe. O modelo criou. |
+|                    |                                                      |
+| ------------------ | ---------------------------------------------------- |
+| `existe`           | o código existe e tem empresas                       |
+| `sem empresas`     | o código existe, mas nada casa com os outros filtros |
+| `código inventado` | não existe. O modelo criou.                          |
 
 Um prefixo válido de 4 dígitos (`85`, `8599`) é resolvido pelas subclasses abaixo
 dele — acusar um prefixo legítimo de ser inventado é o erro oposto, e igualmente ruim.
@@ -128,9 +134,25 @@ stack. Um critério desses não vira filtro — e o painel diz isso, critério p
 faltavam na versão anterior, o que era defensável quando era uma home por empresa e
 deixa de ser num crawl que segue links.
 
+**Erro de rede tem nome.** O `fetch` do Node relata tudo como "fetch failed" e esconde
+o motivo em `cause`. Aqui isso decide coisas opostas: "domínio não existe" significa
+que o palpite pelo e-mail estava errado; "conexão recusada" significa que estava certo
+e o site caiu.
+
 **Dado do Google fica separado.** Os termos do Places permitem guardar o `place_id` e
 nada mais. Por isso ele tem tabela própria (`places_lookups`), onde não existe coluna
-para nome, telefone ou avaliação.
+para nome, telefone ou avaliação — e a máscara de campos pede só `id` e `websiteUri`,
+porque um campo que nunca foi buscado não tem como ser guardado por engano.
+
+É a única etapa que gasta dinheiro, então: desligada sem chave, teto mensal da cota
+gratuita conferido **antes** da requisição, e sem escape para "pode cobrar". Quando a
+cota acaba no meio de um lote, o que já foi consultado fica salvo e o botão diz onde
+parou — cota esgotada é um resultado, não uma falha.
+
+**Nem toda heurística pega tudo, e tudo bem.** O e-mail `francisco@senoecosseno.com.br`
+passou pelo filtro de contabilidade (o nome é um trocadilho com seno e cosseno). O
+crawl leu a página, o título era "Seno e Cosseno — Soluções Contábeis", e o modelo
+reprovou por ramo. Nenhuma regex ia pegar isso; ler a página pegou.
 
 ---
 
@@ -160,13 +182,13 @@ trabalho por vez, no banco e não no JavaScript.
 
 ## Comandos
 
-| | |
-|---|---|
-| `pnpm dev` | painel em http://localhost:3200 |
-| `pnpm data:sync` | baixa e converte a base (`--parts 0,1,…`, `--dry-run`, `--period`) |
-| `pnpm db:migrate` | aplica o schema SQLite |
-| `pnpm test` | testes |
-| `pnpm typecheck` | tsc em todos os pacotes |
+|                   |                                                                    |
+| ----------------- | ------------------------------------------------------------------ |
+| `pnpm dev`        | painel em http://localhost:3200                                    |
+| `pnpm data:sync`  | baixa e converte a base (`--parts 0,1,…`, `--dry-run`, `--period`) |
+| `pnpm db:migrate` | aplica o schema SQLite                                             |
+| `pnpm test`       | testes                                                             |
+| `pnpm typecheck`  | tsc em todos os pacotes                                            |
 
 Depois do `data:sync`, `data/downloads/` pode ser apagado — são 2,9 GB de ZIPs que só
 servem para reconverter sem baixar de novo.

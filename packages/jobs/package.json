@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Trabalho longo rodando no processo, com progresso na tabela jobs.",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@cnpj/core": "workspace:*",
     "@cnpj/data": "workspace:*",

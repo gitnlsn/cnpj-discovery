@@ -113,7 +113,12 @@ function optStr(v: unknown, max: number = LIMITS.maxTextLen): string | null {
   return typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
 }
 
-function strArray(v: unknown, field: string, max: number, itemMax: number = LIMITS.maxTextLen): string[] {
+function strArray(
+  v: unknown,
+  field: string,
+  max: number,
+  itemMax: number = LIMITS.maxTextLen
+): string[] {
   if (v == null) return [];
   if (!Array.isArray(v)) throw new SpecError(`${field}: esperava uma lista`);
   const out = v
@@ -151,8 +156,9 @@ function parseTargeting(v: unknown): Targeting {
       .map(cleanCnae)
       .filter((c): c is string => c !== null),
     ufs: strArray(t.ufs, "targeting.ufs", LIMITS.maxUfs, 2).map((u) => u.toUpperCase()),
-    channels: (Array.isArray(t.channels) ? t.channels : [])
-      .filter((c): c is Channel => c === "mobile" || c === "landline"),
+    channels: (Array.isArray(t.channels) ? t.channels : []).filter(
+      (c): c is Channel => c === "mobile" || c === "landline"
+    ),
     naturezaPrefixes: strArray(t.naturezaPrefixes, "targeting.naturezaPrefixes", 8, 4),
     excludeMei: bool(t.excludeMei),
     matrizOnly: bool(t.matrizOnly, true),
@@ -169,7 +175,9 @@ function parseProbes(v: unknown): Probe[] {
   const out: Probe[] = [];
   for (const raw of v) {
     if (!isRecord(raw)) continue;
-    const key = optStr(raw.key, 40)?.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+    const key = optStr(raw.key, 40)
+      ?.toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_");
     const terms = strArray(raw.terms, "probe.terms", LIMITS.maxProbeTerms, 60);
     if (!key || seen.has(key) || terms.length === 0) continue;
     seen.add(key);
@@ -197,9 +205,20 @@ const ANCHOR_KEYS = ["1", "2", "3", "4", "5"] as const;
  * Dropping these falls back to the sane default pair below.
  */
 const RESERVED_RECOMMENDATIONS = new Set([
-  "notes", "hookbad", "hookgood", "hook_bad", "hook_good",
-  "axes", "probes", "targeting", "rubric", "summary", "buyer", "problem",
-  "sitesignals", "site_signals",
+  "notes",
+  "hookbad",
+  "hookgood",
+  "hook_bad",
+  "hook_good",
+  "axes",
+  "probes",
+  "targeting",
+  "rubric",
+  "summary",
+  "buyer",
+  "problem",
+  "sitesignals",
+  "site_signals",
 ]);
 
 function parseAxes(v: unknown): Axis[] {
@@ -207,7 +226,9 @@ function parseAxes(v: unknown): Axis[] {
   const out: Axis[] = [];
   for (const raw of v) {
     if (!isRecord(raw)) continue;
-    const key = optStr(raw.key, 40)?.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+    const key = optStr(raw.key, 40)
+      ?.toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_");
     const anchorsRaw = isRecord(raw.anchors) ? raw.anchors : null;
     if (!key || !anchorsRaw) continue;
     // Every level must be described. A missing anchor is what turns a 1-5 scale
@@ -216,7 +237,10 @@ function parseAxes(v: unknown): Axis[] {
     let complete = true;
     for (const k of ANCHOR_KEYS) {
       const a = optStr(anchorsRaw[k], 200);
-      if (!a) { complete = false; break; }
+      if (!a) {
+        complete = false;
+        break;
+      }
       anchors[k] = a;
     }
     if (!complete) continue;
@@ -237,7 +261,10 @@ function parseRubric(v: unknown): Rubric {
   const recs: Recommendation[] = (Array.isArray(r.recommendations) ? r.recommendations : [])
     .filter(isRecord)
     .map((x) => ({
-      value: optStr(x.value, 40)?.toLowerCase().replace(/[^a-z0-9_]+/g, "_") ?? "",
+      value:
+        optStr(x.value, 40)
+          ?.toLowerCase()
+          .replace(/[^a-z0-9_]+/g, "_") ?? "",
       label: optStr(x.label, 80) ?? "",
       when: optStr(x.when, 200) ?? "",
     }))

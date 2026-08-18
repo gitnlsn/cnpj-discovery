@@ -53,7 +53,9 @@ function parseArgs(argv: string[]): Args {
   return {
     period: get("--period"),
     parts,
-    only: get("--only")?.split(",").map((s) => s.trim()),
+    only: get("--only")
+      ?.split(",")
+      .map((s) => s.trim()),
     dryRun: argv.includes("--dry-run"),
     keepZips: argv.includes("--keep-zips"),
   };
@@ -96,7 +98,8 @@ async function main(): Promise<void> {
 
   const files: string[] = [];
   if (wants(args, "ref")) files.push("Cnaes.zip", "Municipios.zip");
-  if (wants(args, "estabelecimentos")) files.push(...args.parts.map((p) => `Estabelecimentos${p}.zip`));
+  if (wants(args, "estabelecimentos"))
+    files.push(...args.parts.map((p) => `Estabelecimentos${p}.zip`));
   if (wants(args, "empresas")) files.push(...args.parts.map((p) => `Empresas${p}.zip`));
   if (wants(args, "simples")) files.push("Simples.zip");
 
@@ -134,13 +137,22 @@ async function main(): Promise<void> {
   };
 
   const tick = (name: string) => (s: FilterStats) =>
-    progressLine(name, `${s.read.toLocaleString("pt-BR")} lidas · ${s.kept.toLocaleString("pt-BR")} mantidas`);
+    progressLine(
+      name,
+      `${s.read.toLocaleString("pt-BR")} lidas · ${s.kept.toLocaleString("pt-BR")} mantidas`
+    );
 
   if (wants(args, "ref")) {
     const cnaes = await fetchOne("Cnaes.zip");
-    await convertRef(conn, cnaes, join(dl, "t-cnaes.csv"), paths.cnaes(), ["codigo", "descricao"]);
+    await convertRef(conn, cnaes, join(dl, "t-cnaes.csv"), paths.cnaes(), [
+      "codigo",
+      "descricao",
+    ]);
     const mun = await fetchOne("Municipios.zip");
-    await convertRef(conn, mun, join(dl, "t-mun.csv"), paths.municipios(), ["codigo", "descricao"]);
+    await convertRef(conn, mun, join(dl, "t-mun.csv"), paths.municipios(), [
+      "codigo",
+      "descricao",
+    ]);
     console.log("  referências prontas (cnaes, municípios)\n");
   }
 
@@ -149,7 +161,12 @@ async function main(): Promise<void> {
       const name = `Estabelecimentos${p}.zip`;
       const zip = await fetchOne(name);
       const s = await convertEstabelecimentos(
-        conn, zip, join(dl, `t-estab-${p}.csv`), paths.estabelecimentos(), `p${p}`, tick(name)
+        conn,
+        zip,
+        join(dl, `t-estab-${p}.csv`),
+        paths.estabelecimentos(),
+        `p${p}`,
+        tick(name)
       );
       process.stdout.write("\n");
       totals[name] = s;
@@ -158,7 +175,12 @@ async function main(): Promise<void> {
       const name = `Empresas${p}.zip`;
       const zip = await fetchOne(name);
       const s = await convertEmpresas(
-        conn, zip, join(dl, `t-emp-${p}.csv`), paths.empresas(), `p${p}`, tick(name)
+        conn,
+        zip,
+        join(dl, `t-emp-${p}.csv`),
+        paths.empresas(),
+        `p${p}`,
+        tick(name)
       );
       process.stdout.write("\n");
       totals[name] = s;
@@ -167,7 +189,13 @@ async function main(): Promise<void> {
 
   if (wants(args, "simples")) {
     const zip = await fetchOne("Simples.zip");
-    const s = await convertSimples(conn, zip, join(dl, "t-simples.csv"), paths.simples(), tick("Simples.zip"));
+    const s = await convertSimples(
+      conn,
+      zip,
+      join(dl, "t-simples.csv"),
+      paths.simples(),
+      tick("Simples.zip")
+    );
     process.stdout.write("\n");
     totals["Simples.zip"] = s;
   }
@@ -184,7 +212,9 @@ async function main(): Promise<void> {
     console.log(
       `  ${name.padEnd(26)} ${s.read.toLocaleString("pt-BR").padStart(12)} lidas → ` +
         `${s.kept.toLocaleString("pt-BR").padStart(12)} mantidas (${pct}%)` +
-        (s.withPhone ? ` · ${((s.withPhone / (s.kept || 1)) * 100).toFixed(1)}% com telefone` : "")
+        (s.withPhone
+          ? ` · ${((s.withPhone / (s.kept || 1)) * 100).toFixed(1)}% com telefone`
+          : "")
     );
   }
   console.log("\nParquet em disco:");
@@ -196,7 +226,9 @@ async function main(): Promise<void> {
     console.log(`\n  Parcial: partes ${args.parts.join(",")} de 0-9.`);
   }
   if (!args.keepZips) {
-    console.log(`\n  Os ZIPs continuam em ${dl} (apague à vontade; --keep-zips é o padrão hoje).`);
+    console.log(
+      `\n  Os ZIPs continuam em ${dl} (apague à vontade; --keep-zips é o padrão hoje).`
+    );
   }
 }
 

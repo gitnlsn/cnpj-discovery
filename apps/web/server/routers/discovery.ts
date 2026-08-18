@@ -13,10 +13,19 @@ import { router, publicProcedure, notFound } from "../trpc";
 import { requireLlm } from "../../lib/llm";
 
 const filters = z.object({
-  cnae: z.array(z.string().regex(/^\d{2,7}$/)).max(40).optional(),
+  cnae: z
+    .array(z.string().regex(/^\d{2,7}$/))
+    .max(40)
+    .optional(),
   uf: z.array(z.string().length(2)).max(27).optional(),
-  foundedFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  foundedTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  foundedFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  foundedTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   hasPhone: z.boolean().optional(),
   hasEmail: z.boolean().optional(),
   mei: z.boolean().optional(),
@@ -36,7 +45,10 @@ export const discoveryRouter = router({
   suggest: publicProcedure
     .input(z.object({ projectId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const [row] = await ctx.db.select().from(projects).where(eq(projects.id, input.projectId));
+      const [row] = await ctx.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, input.projectId));
       if (!row) notFound(`projeto ${input.projectId} não existe`);
 
       const { suggestions, model } = await suggestCnaes(requireLlm(), {
@@ -75,7 +87,9 @@ export const discoveryRouter = router({
           // Kept so the model's guess can be compared against the real label —
           // that mismatch is the tell for a plausible-looking wrong code.
           rationale: `${s.rationale}${
-            r?.descricao && s.guessedLabel ? ` · o modelo achou que era "${s.guessedLabel}"` : ""
+            r?.descricao && s.guessedLabel
+              ? ` · o modelo achou que era "${s.guessedLabel}"`
+              : ""
           }`,
           suggestedBy: "llm" as const,
           chosen: false,
@@ -157,7 +171,9 @@ export const discoveryRouter = router({
     .input(
       z.object({
         filters,
-        order: z.enum(["founded-desc", "founded-asc", "name", "capital-desc"]).default("founded-desc"),
+        order: z
+          .enum(["founded-desc", "founded-asc", "name", "capital-desc"])
+          .default("founded-desc"),
         limit: z.number().int().min(1).max(500).default(50),
         offset: z.number().int().min(0).default(0),
       })
@@ -171,7 +187,9 @@ export const discoveryRouter = router({
       })
     ),
 
-  reach: publicProcedure.input(z.object({ filters })).query(({ input }) => countReach(input.filters)),
+  reach: publicProcedure
+    .input(z.object({ filters }))
+    .query(({ input }) => countReach(input.filters)),
 
   /**
    * Pulls chosen companies into the project. This is the only moment anything
@@ -181,7 +199,10 @@ export const discoveryRouter = router({
     .input(
       z.object({
         projectId: z.string(),
-        cnpjs: z.array(z.string().regex(/^\d{14}$/)).min(1).max(2000),
+        cnpjs: z
+          .array(z.string().regex(/^\d{14}$/))
+          .min(1)
+          .max(2000),
         sourcePeriod: z.string().max(10).optional(),
       })
     )

@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { companies, crawls, scores, projects } from "@cnpj/db";
-import { scoreCompanies, parseProjectSpec, type ScoreCandidate, type SiteSignals } from "@cnpj/core";
+import {
+  scoreCompanies,
+  parseProjectSpec,
+  type ScoreCandidate,
+  type SiteSignals,
+} from "@cnpj/core";
 import { startJob } from "@cnpj/jobs";
 import { router, publicProcedure, notFound, badRequest } from "../trpc";
 import { requireLlm } from "../../lib/llm";
@@ -18,6 +23,11 @@ export const scoringRouter = router({
     .input(
       z.object({
         projectId: z.string(),
+        /** Explicit selection. Without it, everything not yet scored. */
+        cnpjs: z
+          .array(z.string().regex(/^\d{14}$/))
+          .max(2000)
+          .optional(),
         limit: z.number().int().min(1).max(500).default(50),
         batchSize: z.number().int().min(1).max(20).default(10),
         rescore: z.boolean().default(false),
@@ -45,9 +55,14 @@ export const scoringRouter = router({
         .where(eq(companies.projectId, input.projectId))
         .limit(input.limit * 3);
 
+      // An explicit selection means "score these", including ones already
+      // scored — otherwise picking a row and being silently skipped reads as a
+      // bug in the button.
+      const picked = input.cnpjs ? new Set(input.cnpjs) : null;
       const pending = rows
-        .filter((r) => input.rescore || !r.scores || r.scores.error)
-        .slice(0, input.limit);
+        .filter((r) => (picked ? picked.has(r.companies.cnpj) : true))
+        .filter((r) => picked !== null || input.rescore || !r.scores || r.scores.error)
+        .slice(0, picked ? picked.size : input.limit);
 
       if (pending.length === 0) return { scored: 0, failed: 0 };
 
@@ -118,10 +133,19 @@ export const scoringRouter = router({
             .onConflictDoUpdate({
               target: [scores.projectId, scores.cnpj],
               set: {
-                fits: r.fits, bestFit: r.bestFit, tier: r.tier, confidence: r.confidence,
-                recommendation: r.recommendation, wrongType: r.wrongType, hook: r.hook,
-                advice: r.advice, evidence: r.evidence, model: r.model,
-                promptSha: r.promptSha, error: r.error, scoredAt: new Date().toISOString(),
+                fits: r.fits,
+                bestFit: r.bestFit,
+                tier: r.tier,
+                confidence: r.confidence,
+                recommendation: r.recommendation,
+                wrongType: r.wrongType,
+                hook: r.hook,
+                advice: r.advice,
+                evidence: r.evidence,
+                model: r.model,
+                promptSha: r.promptSha,
+                error: r.error,
+                scoredAt: new Date().toISOString(),
               },
             });
         }

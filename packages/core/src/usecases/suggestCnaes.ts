@@ -60,7 +60,9 @@ export async function suggestCnaes(
   llm: LlmPort,
   input: { description: string; icpText: string }
 ): Promise<{ suggestions: CnaeSuggestion[]; model: string }> {
-  const icp = input.icpText.trim() ? `\n\nPERFIL DE CLIENTE IDEAL:\n${input.icpText.trim()}` : "";
+  const icp = input.icpText.trim()
+    ? `\n\nPERFIL DE CLIENTE IDEAL:\n${input.icpText.trim()}`
+    : "";
   const res = await llm.completeJson<{ suggestions: CnaeSuggestion[] }>({
     task: "suggest",
     schemaName: "cnae_suggestions",

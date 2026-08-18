@@ -27,8 +27,17 @@ test("null becomes empty, never the string 'null'", () => {
 });
 
 test("csvBody coerces booleans to sim/nao and missing keys to empty", () => {
-  const rows = csvBody(["nome", "mei", "faltando"], [{ nome: "X", mei: true }, { nome: "Y", mei: false }]);
-  assert.deepEqual(rows, [["X", "sim", ""], ["Y", "nao", ""]]);
+  const rows = csvBody(
+    ["nome", "mei", "faltando"],
+    [
+      { nome: "X", mei: true },
+      { nome: "Y", mei: false },
+    ]
+  );
+  assert.deepEqual(rows, [
+    ["X", "sim", ""],
+    ["Y", "nao", ""],
+  ]);
 });
 
 test("the Excel variant carries a BOM so a double-click opens it correctly", () => {

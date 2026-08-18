@@ -13,7 +13,6 @@ export { migrate } from "./migrate";
  * for the write lock.
  */
 declare global {
-  // eslint-disable-next-line no-var
   var __cnpjDb: BetterSQLite3Database<typeof schema> | undefined;
 }
 

@@ -64,7 +64,12 @@ export async function GET(
     ? await db
         .select()
         .from(contacts)
-        .where(inArray(contacts.cnpj, filtered.map((r) => r.leads.cnpj)))
+        .where(
+          inArray(
+            contacts.cnpj,
+            filtered.map((r) => r.leads.cnpj)
+          )
+        )
     : [];
 
   const body = filtered.map((r) => {

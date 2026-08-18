@@ -60,7 +60,9 @@ export function runProbes(probes: Probe[], text: string | null): Record<string, 
   const out: Record<string, boolean> = {};
 
   for (const probe of probes) {
-    const terms = probe.terms.map((t: string) => escapeRe(unaccent(t).toLowerCase())).filter(Boolean);
+    const terms = probe.terms
+      .map((t: string) => escapeRe(unaccent(t).toLowerCase()))
+      .filter(Boolean);
     if (!terms.length) continue;
     // Word-bounded so "ia" does not match inside "familia".
     const re = new RegExp(`(?:^|[^a-z0-9])(?:${terms.join("|")})(?:[^a-z0-9]|$)`, "i");

@@ -98,7 +98,12 @@ test("a site that disallows us is not fetched", async () => {
 
 test("a link hub short-circuits without a fetch, leaving page signals unknown", async () => {
   let fetched = 0;
-  const http: HttpPort = { async fetch() { fetched++; return new Response("", { status: 200 }); } };
+  const http: HttpPort = {
+    async fetch() {
+      fetched++;
+      return new Response("", { status: 200 });
+    },
+  };
   const s = await crawlSite("https://linktr.ee/padaria", { http });
   assert.equal(fetched, 0);
   assert.equal(s.isLinkHub, true);
@@ -146,7 +151,10 @@ test("accounting firms are caught mid-domain, but ordinary words are not", () =>
   // ...and these must survive: "descritivo" contains "escrit",
   // "distribuidora" is not "tributa".
   assert.equal(websiteFromEmail("x@descritivo.com.br"), "https://descritivo.com.br");
-  assert.equal(websiteFromEmail("x@distribuidoraabc.com.br"), "https://distribuidoraabc.com.br");
+  assert.equal(
+    websiteFromEmail("x@distribuidoraabc.com.br"),
+    "https://distribuidoraabc.com.br"
+  );
 });
 
 test("mapLimit keeps input order and respects the concurrency ceiling", async () => {

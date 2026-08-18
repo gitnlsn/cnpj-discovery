@@ -23,7 +23,10 @@ export function formatCsv(header: string[], rows: (string | null)[][]): string {
 }
 
 /** Shared cell coercion: null becomes empty, booleans become sim/nao. */
-export function csvBody(header: string[], rows: Record<string, unknown>[]): (string | null)[][] {
+export function csvBody(
+  header: string[],
+  rows: Record<string, unknown>[]
+): (string | null)[][] {
   return rows.map((r) =>
     header.map((h) => {
       const v = r[h];

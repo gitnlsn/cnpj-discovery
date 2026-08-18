@@ -81,70 +81,65 @@ export const projectRouter = router({
    * Compiles the ICP into a spec. Two model calls, and the result is validated
    * before it is stored — the model authored it, so it is input, not truth.
    */
-  compile: publicProcedure
-    .input(z.object({ id: slug }))
-    .mutation(async ({ ctx, input }) => {
-      const [row] = await ctx.db.select().from(projects).where(eq(projects.id, input.id));
-      if (!row) notFound(`projeto ${input.id} não existe`);
-      if (!row.description.trim()) {
-        throw new Error("Descreva o produto antes de compilar o perfil.");
-      }
+  compile: publicProcedure.input(z.object({ id: slug })).mutation(async ({ ctx, input }) => {
+    const [row] = await ctx.db.select().from(projects).where(eq(projects.id, input.id));
+    if (!row) notFound(`projeto ${input.id} não existe`);
+    if (!row.description.trim()) {
+      throw new Error("Descreva o produto antes de compilar o perfil.");
+    }
 
-      const { spec, model } = await compileSpec(requireLlm(), {
-        description: row.description,
-        icpText: row.icpText,
+    const { spec, model } = await compileSpec(requireLlm(), {
+      description: row.description,
+      icpText: row.icpText,
+    });
+
+    await ctx.db
+      .update(projects)
+      .set({
+        spec,
+        specModel: model,
+        specCompiledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(projects.id, input.id));
+
+    // Seed the discovery tab with whatever CNAEs the compiler chose, each
+    // resolved against the official dictionary.
+    //
+    // This is not bookkeeping. The compiler writes a label next to the code it
+    // picked, and it is routinely wrong: asked for "ensino médio" it answered
+    // 8599 and captioned it "(ensino médio)", when 8599 is
+    // "Cursos preparatórios / Treinamento profissional" and ensino médio is
+    // 8520. Showing the code beside its REAL description is what makes that
+    // visible instead of it quietly deciding the whole shortlist.
+    if (spec.targeting.cnaePrefixes.length) {
+      const checked = await cnaeReach(spec.targeting.cnaePrefixes, {
+        uf: spec.targeting.ufs.length ? spec.targeting.ufs : undefined,
       });
-
       await ctx.db
-        .update(projects)
-        .set({
-          spec,
-          specModel: model,
-          specCompiledAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(projects.id, input.id));
+        .insert(cnaePicks)
+        .values(
+          checked.map((c) => ({
+            projectId: input.id,
+            cnae: c.codigo,
+            descricao: c.descricao,
+            status: (c.descricao === null ? "unknown" : c.total === 0 ? "empty" : "ok") as
+              "ok" | "unknown" | "empty",
+            reachTotal: c.total,
+            reachWithPhone: c.withPhone,
+            reachRecent: c.recent,
+            rationale: "escolhido ao compilar o perfil — confira a descrição oficial",
+            suggestedBy: "llm" as const,
+            // Never pre-chosen: an unverified code must not silently define
+            // the shortlist.
+            chosen: false,
+          }))
+        )
+        .onConflictDoNothing();
+    }
 
-      // Seed the discovery tab with whatever CNAEs the compiler chose, each
-      // resolved against the official dictionary.
-      //
-      // This is not bookkeeping. The compiler writes a label next to the code it
-      // picked, and it is routinely wrong: asked for "ensino médio" it answered
-      // 8599 and captioned it "(ensino médio)", when 8599 is
-      // "Cursos preparatórios / Treinamento profissional" and ensino médio is
-      // 8520. Showing the code beside its REAL description is what makes that
-      // visible instead of it quietly deciding the whole shortlist.
-      if (spec.targeting.cnaePrefixes.length) {
-        const checked = await cnaeReach(spec.targeting.cnaePrefixes, {
-          uf: spec.targeting.ufs.length ? spec.targeting.ufs : undefined,
-        });
-        await ctx.db
-          .insert(cnaePicks)
-          .values(
-            checked.map((c) => ({
-              projectId: input.id,
-              cnae: c.codigo,
-              descricao: c.descricao,
-              status: (c.descricao === null
-                ? "unknown"
-                : c.total === 0
-                  ? "empty"
-                  : "ok") as "ok" | "unknown" | "empty",
-              reachTotal: c.total,
-              reachWithPhone: c.withPhone,
-              reachRecent: c.recent,
-              rationale: "escolhido ao compilar o perfil — confira a descrição oficial",
-              suggestedBy: "llm" as const,
-              // Never pre-chosen: an unverified code must not silently define
-              // the shortlist.
-              chosen: false,
-            }))
-          )
-          .onConflictDoNothing();
-      }
-
-      return { spec, model };
-    }),
+    return { spec, model };
+  }),
 
   stats: publicProcedure.input(z.object({ id: slug })).query(async ({ ctx, input }) => {
     const comps = await ctx.db
@@ -152,7 +147,12 @@ export const projectRouter = router({
       .from(companies)
       .where(eq(companies.projectId, input.id));
     const scored = await ctx.db
-      .select({ cnpj: scores.cnpj, tier: scores.tier, wrongType: scores.wrongType, error: scores.error })
+      .select({
+        cnpj: scores.cnpj,
+        tier: scores.tier,
+        wrongType: scores.wrongType,
+        error: scores.error,
+      })
       .from(scores)
       .where(eq(scores.projectId, input.id));
 

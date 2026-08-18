@@ -36,9 +36,21 @@ REGRAS:
 const TARGETING_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["cnaePrefixes", "cnaeExclude", "ufs", "excludeMei", "matrizOnly", "probes", "icpCoverage"],
+  required: [
+    "cnaePrefixes",
+    "cnaeExclude",
+    "ufs",
+    "excludeMei",
+    "matrizOnly",
+    "probes",
+    "icpCoverage",
+  ],
   properties: {
-    cnaePrefixes: { type: "array", items: { type: "string" }, maxItems: LIMITS.maxCnaePrefixes },
+    cnaePrefixes: {
+      type: "array",
+      items: { type: "string" },
+      maxItems: LIMITS.maxCnaePrefixes,
+    },
     cnaeExclude: { type: "array", items: { type: "string" } },
     ufs: { type: "array", items: { type: "string" } },
     naturezaPrefixes: { type: "array", items: { type: "string" } },
@@ -123,8 +135,11 @@ const RUBRIC_SCHEMA = {
             additionalProperties: false,
             required: ["1", "2", "3", "4", "5"],
             properties: {
-              "1": { type: "string" }, "2": { type: "string" }, "3": { type: "string" },
-              "4": { type: "string" }, "5": { type: "string" },
+              "1": { type: "string" },
+              "2": { type: "string" },
+              "3": { type: "string" },
+              "4": { type: "string" },
+              "5": { type: "string" },
             },
           },
         },
@@ -138,7 +153,9 @@ const RUBRIC_SCHEMA = {
         additionalProperties: false,
         required: ["value", "label", "when"],
         properties: {
-          value: { type: "string" }, label: { type: "string" }, when: { type: "string" },
+          value: { type: "string" },
+          label: { type: "string" },
+          when: { type: "string" },
         },
       },
     },
@@ -159,10 +176,7 @@ export interface CompileResult {
   model: string;
 }
 
-export async function compileSpec(
-  llm: LlmPort,
-  input: CompileInput
-): Promise<CompileResult> {
+export async function compileSpec(llm: LlmPort, input: CompileInput): Promise<CompileResult> {
   const icpBlock = input.icpText.trim()
     ? `\n\nPERFIL DE CLIENTE IDEAL (trate como requisito, não como sugestão):\n${input.icpText.trim()}`
     : "";

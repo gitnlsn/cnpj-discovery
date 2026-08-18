@@ -131,9 +131,7 @@ export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
     const read = c.site.textExcerpt?.length ?? 0;
     if (hits.length) lines.push(`  encontrado na página: ${hits.join(", ")}`);
     if (misses.length) {
-      lines.push(
-        `  procurado e NÃO encontrado (li ${read} caracteres): ${misses.join(", ")}`
-      );
+      lines.push(`  procurado e NÃO encontrado (li ${read} caracteres): ${misses.join(", ")}`);
     }
     // Say it outright rather than hoping the model infers it.
     if (!hits.length && read >= CONCLUSIVE_TEXT_CHARS) {
@@ -166,9 +164,19 @@ const CONFIDENCES = ["high", "medium", "low", "cannot_determine"] as const;
 
 function failed(cnpj: string, sha: string, error: string): ScoreResult {
   return {
-    cnpj, fits: {}, bestFit: null, tier: null, confidence: null,
-    recommendation: null, wrongType: false, hook: null, advice: null,
-    evidence: null, model: null, promptSha: sha, error,
+    cnpj,
+    fits: {},
+    bestFit: null,
+    tier: null,
+    confidence: null,
+    recommendation: null,
+    wrongType: false,
+    hook: null,
+    advice: null,
+    evidence: null,
+    model: null,
+    promptSha: sha,
+    error,
   };
 }
 
@@ -198,8 +206,8 @@ export async function scoreCompanies(
     const batch = candidates.slice(i, i + batchSize);
     const user = batch.map((c) => renderCandidate(c, spec)).join("\n\n");
 
-    let results: RawResult[] = [];
-    let model: string | null = null;
+    let results: RawResult[];
+    let model: string | null;
     try {
       const res = await llm.completeJson<{ results?: RawResult[] } | RawResult[]>({
         task: "score",

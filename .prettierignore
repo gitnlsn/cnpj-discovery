@@ -1,0 +1,7 @@
+data/
+.next/
+node_modules/
+pnpm-lock.yaml
+gmaps-whatsapp-extractor/
+apps/web/AGENTS.md
+apps/web/CLAUDE.md

@@ -12,7 +12,6 @@ import { join, dirname } from "node:path";
  * every edit in dev, and a fresh DuckDB instance per edit leaks file handles.
  */
 declare global {
-  // eslint-disable-next-line no-var
   var __cnpjDuck: Promise<DuckDBConnection> | undefined;
 }
 
