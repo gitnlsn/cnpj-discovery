@@ -8,6 +8,8 @@ import {
   robotsAllows,
   crawlSite,
   HostThrottle,
+  mapLimit,
+  describeFetchError,
 } from "../src/usecases/crawl";
 import type { HttpPort } from "../src/ports/index";
 
@@ -145,4 +147,34 @@ test("accounting firms are caught mid-domain, but ordinary words are not", () =>
   // "distribuidora" is not "tributa".
   assert.equal(websiteFromEmail("x@descritivo.com.br"), "https://descritivo.com.br");
   assert.equal(websiteFromEmail("x@distribuidoraabc.com.br"), "https://distribuidoraabc.com.br");
+});
+
+test("mapLimit keeps input order and respects the concurrency ceiling", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const out = await mapLimit([10, 40, 20, 5, 30], 2, async (ms, i) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, ms));
+    inFlight--;
+    return `${i}:${ms}`;
+  });
+  assert.deepEqual(out, ["0:10", "1:40", "2:20", "3:5", "4:30"]);
+  assert.equal(peak, 2, "never more than the limit in flight");
+});
+
+test("network failures are named, not reported as 'fetch failed'", () => {
+  // "domain does not exist" and "connection refused" lead to opposite decisions
+  // about a lead, and Node reports both as the same opaque string.
+  const wrap = (code: string) =>
+    Object.assign(new TypeError("fetch failed"), { cause: { code } });
+  assert.equal(describeFetchError(wrap("ENOTFOUND"), 8000), "domínio não existe");
+  assert.equal(describeFetchError(wrap("ECONNREFUSED"), 8000), "conexão recusada");
+  assert.equal(describeFetchError(wrap("CERT_HAS_EXPIRED"), 8000), "certificado HTTPS vencido");
+  assert.equal(
+    describeFetchError(Object.assign(new Error("x"), { name: "AbortError" }), 8000),
+    "timeout após 8000ms"
+  );
+  // An unrecognised cause must not surface the useless default.
+  assert.equal(describeFetchError(new TypeError("fetch failed"), 8000), "site inacessível");
 });

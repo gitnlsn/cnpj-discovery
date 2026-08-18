@@ -47,6 +47,29 @@ function EnrichmentTab() {
     onSettled: () => { setBusy(null); refresh(); },
   });
 
+  // Polls only while a job is in flight, then stops. A fixed interval would
+  // keep waking an idle page forever.
+  const jobs = useQuery({
+    ...trpc.jobs.status.queryOptions(),
+    refetchInterval: (q) => (q.state.data?.current ? 1500 : false),
+  });
+  const running = jobs.data?.current ?? null;
+  const progress = (running?.progress ?? null) as { done: number; total: number } | null;
+
+  const crawlBatch = useMutation({
+    ...trpc.enrichment.crawlBatch.mutationOptions(),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: trpc.jobs.status.queryKey() }),
+  });
+  const cancel = useMutation({
+    ...trpc.jobs.cancel.mutationOptions(),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: trpc.jobs.status.queryKey() }),
+  });
+
+  // When the job ends, the table under it is stale.
+  const [lastJob, setLastJob] = useState<number | null>(null);
+  if (running && running.id !== lastJob) setLastJob(running.id);
+  if (!running && lastJob !== null) { setLastJob(null); refresh(); }
+
   if (!projectId) return <NoProject />;
   const rows = list.data ?? [];
 
@@ -82,6 +105,32 @@ function EnrichmentTab() {
             respeita robots.txt e espera 1s entre requisições ao mesmo host
           </span>
         </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            className="btn btn-primary"
+            disabled={Boolean(running) || crawlBatch.isPending || !pending.data?.withGuessableSite}
+            onClick={() => crawlBatch.mutate({ projectId, limit: 200, depth, concurrency: 6 })}
+          >
+            {running ? "Visitando…" : `Visitar os ${pending.data?.withGuessableSite ?? 0} sites conhecidos`}
+            <small>grátis</small>
+          </button>
+          {running && (
+            <>
+              <span className="muted">
+                {progress ? `${progress.done}/${progress.total}` : "iniciando…"}
+              </span>
+              <button className="btn" onClick={() => cancel.mutate({ id: running.id })}>
+                Cancelar
+              </button>
+            </>
+          )}
+          {crawlBatch.data?.skipped ? (
+            <span className="muted">
+              {crawlBatch.data.skipped} sem site conhecido — o e-mail é gmail, ou é do contador
+            </span>
+          ) : null}
+        </div>
+        <ErrorBox error={crawlBatch.error} />
       </div>
 
       <ErrorBox error={crawl.error ?? reveal.error} />

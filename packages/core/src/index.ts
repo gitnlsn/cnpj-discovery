@@ -17,5 +17,8 @@ export {
   parseRobots,
   robotsAllows,
   HostThrottle,
+  describeFetchError,
+  mapLimit,
   type SiteSignals,
+  type CrawlOptions,
 } from "./usecases/crawl";

@@ -116,6 +116,26 @@ CREATE TABLE IF NOT EXISTS scores (
 );
 CREATE INDEX IF NOT EXISTS scores_rank_idx ON scores (project_id, best_fit);
 
+-- A company you decided is worth pursuing, and how far you have got with it.
+--
+-- Separate from "companies" on purpose: being in the project means "I pulled
+-- this row in to look at it", while being here means "I decided". Those are
+-- different claims and collapsing them loses the decision.
+--
+-- This records what you did. It does not contact anyone.
+CREATE TABLE IF NOT EXISTS leads (
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  cnpj         TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'flagged'
+               CHECK (status IN ('flagged','contacted','replied','won','lost')),
+  notes        TEXT,
+  flagged_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  contacted_at TEXT,
+  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (project_id, cnpj)
+);
+CREATE INDEX IF NOT EXISTS leads_status_idx ON leads (project_id, status);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places')),

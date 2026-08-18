@@ -49,6 +49,22 @@ function ScoringTab() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: trpc.jobs.status.queryKey() }),
   });
 
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const flagged = useQuery({
+    ...trpc.leads.list.queryOptions({ projectId: projectId ?? "" }),
+    enabled: Boolean(projectId),
+  });
+  const alreadyFlagged = new Set((flagged.data ?? []).map((l) => l.lead.cnpj));
+
+  const flag = useMutation({
+    ...trpc.leads.flag.mutationOptions(),
+    onSuccess: () => {
+      setPicked(new Set());
+      void qc.invalidateQueries({ queryKey: trpc.leads.list.queryKey() });
+      void qc.invalidateQueries({ queryKey: trpc.leads.counts.queryKey() });
+    },
+  });
+
   // When the job disappears, the tables underneath it are stale.
   const [lastJob, setLastJob] = useState<number | null>(null);
   if (running && running.id !== lastJob) setLastJob(running.id);
@@ -118,8 +134,21 @@ function ScoringTab() {
             ))}
           </div>
         </div>
-        <ErrorBox error={run.error} />
+        <ErrorBox error={run.error ?? flag.error} />
       </div>
+
+      {view === "ranked" && (
+        <div className="row" style={{ marginBottom: 8 }}>
+          <button
+            className="btn btn-primary"
+            disabled={picked.size === 0 || flag.isPending}
+            onClick={() => flag.mutate({ projectId, cnpjs: [...picked] })}
+          >
+            Marcar {picked.size} como lead
+          </button>
+          <span className="muted">vão para a aba Leads, onde dá para baixar o CSV</span>
+        </div>
+      )}
 
       {view === "discarded" && (
         <p className="muted" style={{ marginTop: -4 }}>
@@ -133,6 +162,7 @@ function ScoringTab() {
         <table className="tbl">
           <thead>
             <tr>
+              {view === "ranked" && <th></th>}
               <th>empresa</th>
               {view === "ranked" && <><th>tier</th><th className="num">nota</th><th>confiança</th></>}
               <th>{view === "failed" ? "erro" : view === "discarded" ? "motivo" : "gancho"}</th>
@@ -145,6 +175,24 @@ function ScoringTab() {
               const evidence = score.evidence as { justification?: string } | null;
               return (
                 <tr key={score.cnpj}>
+                  {view === "ranked" && (
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={picked.has(score.cnpj) || alreadyFlagged.has(score.cnpj)}
+                        disabled={alreadyFlagged.has(score.cnpj)}
+                        title={alreadyFlagged.has(score.cnpj) ? "já está nos leads" : ""}
+                        onChange={() =>
+                          setPicked((s) => {
+                            const next = new Set(s);
+                            if (next.has(score.cnpj)) next.delete(score.cnpj);
+                            else next.add(score.cnpj);
+                            return next;
+                          })
+                        }
+                      />
+                    </td>
+                  )}
                   <td className="wrap">
                     <div>{company?.nomeFantasia ?? company?.razaoSocial ?? score.cnpj}</div>
                     <div className="muted">
@@ -183,7 +231,7 @@ function ScoringTab() {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="muted">
+                <td colSpan={8} className="muted">
                   {view === "ranked"
                     ? "nada pontuado ainda"
                     : view === "discarded"

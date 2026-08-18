@@ -11,6 +11,8 @@ import {
   type Probe,
 } from "@cnpj/core";
 import { listCompaniesByCnpj } from "@cnpj/data";
+import { startJob } from "@cnpj/jobs";
+import { mapLimit, type SiteSignals } from "@cnpj/core";
 import { router, publicProcedure, notFound, badRequest, type Context } from "../trpc";
 
 const cnpj = z.string().regex(/^\d{14}$/);
@@ -24,6 +26,83 @@ async function projectProbes(db: Context["db"], projectId: string): Promise<Prob
   } catch {
     return [];
   }
+}
+
+type UrlSource = "email" | "places" | "manual";
+
+/**
+ * Where a company's site would come from, if anywhere.
+ *
+ * Order matters: a URL confirmed through Places beats one guessed from the
+ * e-mail domain, and an explicitly typed one beats both.
+ */
+function resolveUrl(
+  company: { email: string | null },
+  place: { websiteUrl: string | null } | undefined,
+  manual?: string
+): { url: string; source: UrlSource } | null {
+  if (manual) return { url: manual, source: "manual" };
+  if (place?.websiteUrl) return { url: place.websiteUrl, source: "places" };
+  const guess = websiteFromEmail(company.email);
+  return guess ? { url: guess, source: "email" } : null;
+}
+
+/**
+ * Crawls one company and stores what was found.
+ *
+ * Shared by the single-company button and the batch job so there is exactly one
+ * implementation of "what a crawl records" — the previous project ended up with
+ * two copies of its CSV writer for want of this.
+ */
+async function crawlAndStore(
+  db: Context["db"],
+  cnpjValue: string,
+  target: { url: string; source: UrlSource },
+  opts: { depth: number; probes: Probe[]; throttle: HostThrottle }
+): Promise<SiteSignals> {
+  const signals = await crawlSite(target.url, {
+    depth: opts.depth,
+    probes: opts.probes,
+    throttle: opts.throttle,
+  });
+
+  const row = {
+    websiteUrl: target.url,
+    finalUrl: signals.finalUrl,
+    httpStatus: signals.httpStatus,
+    error: signals.error,
+    urlSource: target.source,
+    signals,
+    textExcerpt: signals.textExcerpt,
+    pagesFetched: signals.pagesFetched,
+    checkedAt: new Date().toISOString(),
+  };
+
+  await db
+    .insert(crawls)
+    .values({ cnpj: cnpjValue, ...row })
+    .onConflictDoUpdate({ target: crawls.cnpj, set: row });
+
+  // A number on the company's own site beats the one filed with the Receita,
+  // which is frequently the accountant's line.
+  if (signals.sitePhone) {
+    const digits = signals.sitePhone.replace(/^\+55/, "");
+    const parsed = classifyReceitaPhone(digits.slice(0, 2), digits.slice(2));
+    if (parsed) {
+      await db
+        .insert(contacts)
+        .values({
+          cnpj: cnpjValue,
+          phoneE164: parsed.e164,
+          isMobile: parsed.isMobile,
+          source: "site",
+          waMe: buildWaMeLink(parsed.e164),
+        })
+        .onConflictDoNothing();
+    }
+  }
+
+  return signals;
 }
 
 export const enrichmentRouter = router({
@@ -110,70 +189,87 @@ export const enrichmentRouter = router({
         .from(placesLookups)
         .where(eq(placesLookups.cnpj, input.cnpj));
 
-      const url = input.url ?? place?.websiteUrl ?? websiteFromEmail(company.email);
-      const urlSource = input.url ? "manual" : place?.websiteUrl ? "places" : "email";
-      if (!url) {
-        badRequest(
-          "Nenhum site conhecido. Tente 'Buscar no Google Places' ou informe a URL."
-        );
+      const target = resolveUrl(company, place, input.url);
+      if (!target) {
+        badRequest("Nenhum site conhecido. Tente 'Buscar no Google Places' ou informe a URL.");
+      }
+
+      return crawlAndStore(ctx.db, input.cnpj, target, {
+        depth: input.depth,
+        probes: await projectProbes(ctx.db, input.projectId),
+        throttle: new HostThrottle(1000),
+      });
+    }),
+
+  /**
+   * Crawls every company in the project that has a site to visit.
+   *
+   * Runs as a job: at one second per host plus the fetch itself, a hundred
+   * companies is minutes, and the crawl is the input scoring depends on — an
+   * uncrawled company can only ever come back `cannot_determine`.
+   */
+  crawlBatch: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        limit: z.number().int().min(1).max(500).default(50),
+        depth: z.number().int().min(0).max(5).default(0),
+        concurrency: z.number().int().min(1).max(20).default(6),
+        /** Re-visit companies already crawled. Off by default. */
+        recheck: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .select()
+        .from(companies)
+        .leftJoin(crawls, eq(crawls.cnpj, companies.cnpj))
+        .leftJoin(placesLookups, eq(placesLookups.cnpj, companies.cnpj))
+        .where(eq(companies.projectId, input.projectId));
+
+      const targets = rows
+        .filter((r) => input.recheck || !r.crawls)
+        .map((r) => ({
+          cnpj: r.companies.cnpj,
+          target: resolveUrl(r.companies, r.places_lookups ?? undefined),
+        }))
+        .filter((t): t is { cnpj: string; target: { url: string; source: UrlSource } } =>
+          t.target !== null
+        )
+        .slice(0, input.limit);
+
+      const skipped = rows.filter((r) => input.recheck || !r.crawls).length - targets.length;
+      if (targets.length === 0) {
+        return { jobId: null, queued: 0, skipped };
       }
 
       const probes = await projectProbes(ctx.db, input.projectId);
-      const signals = await crawlSite(url, {
-        depth: input.depth,
-        probes,
-        throttle: new HostThrottle(1000),
-      });
+      // One throttle for the whole run, so two companies sharing a host — a
+      // franchise, a school group — still get their requests spaced out.
+      const throttle = new HostThrottle(1000);
 
-      await ctx.db
-        .insert(crawls)
-        .values({
-          cnpj: input.cnpj,
-          websiteUrl: url,
-          finalUrl: signals.finalUrl,
-          httpStatus: signals.httpStatus,
-          error: signals.error,
-          urlSource,
-          signals,
-          textExcerpt: signals.textExcerpt,
-          pagesFetched: signals.pagesFetched,
-          checkedAt: new Date().toISOString(),
-        })
-        .onConflictDoUpdate({
-          target: crawls.cnpj,
-          set: {
-            websiteUrl: url,
-            finalUrl: signals.finalUrl,
-            httpStatus: signals.httpStatus,
-            error: signals.error,
-            urlSource,
-            signals,
-            textExcerpt: signals.textExcerpt,
-            pagesFetched: signals.pagesFetched,
-            checkedAt: new Date().toISOString(),
-          },
+      const job = startJob(ctx.db, "crawl", input.projectId, async (jobCtx) => {
+        jobCtx.log(`visitando ${targets.length} sites (${skipped} sem site conhecido)`);
+        let done = 0;
+        let alive = 0;
+        let dead = 0;
+
+        await mapLimit(targets, input.concurrency, async ({ cnpj: c, target }) => {
+          if (jobCtx.cancelled()) return;
+          const signals = await crawlAndStore(ctx.db, c, target, {
+            depth: input.depth,
+            probes,
+            throttle,
+          });
+          if (signals.error || signals.isDead) dead++;
+          else alive++;
+          jobCtx.progress({ done: ++done, total: targets.length });
         });
 
-      // A number on the company's own site beats the one filed with the
-      // Receita, which is frequently the accountant's line.
-      if (signals.sitePhone) {
-        const digits = signals.sitePhone.replace(/^\+55/, "");
-        const parsed = classifyReceitaPhone(digits.slice(0, 2), digits.slice(2));
-        if (parsed) {
-          await ctx.db
-            .insert(contacts)
-            .values({
-              cnpj: input.cnpj,
-              phoneE164: parsed.e164,
-              isMobile: parsed.isMobile,
-              source: "site",
-              waMe: buildWaMeLink(parsed.e164),
-            })
-            .onConflictDoNothing();
-        }
-      }
+        jobCtx.log(`pronto: ${alive} sites lidos, ${dead} mortos ou bloqueados`);
+      });
 
-      return signals;
+      return { jobId: job.id, queued: targets.length, skipped };
     }),
 
   /** How many companies still have no site to crawl. */

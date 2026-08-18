@@ -188,6 +188,38 @@ export const scores = sqliteTable(
 );
 
 /**
+ * A company you decided is worth pursuing, and how far you have got with it.
+ *
+ * Separate from `companies` deliberately: being in the project means "I pulled
+ * this row in to look at it"; being here means "I decided". Collapsing the two
+ * loses the decision, which is the only part a human actually made.
+ *
+ * `contacted` records that you reached out. Nothing in this app sends anything.
+ */
+export const leads = sqliteTable(
+  "leads",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    cnpj: text("cnpj").notNull(),
+    status: text("status", {
+      enum: ["flagged", "contacted", "replied", "won", "lost"],
+    })
+      .notNull()
+      .default("flagged"),
+    notes: text("notes"),
+    flaggedAt: text("flagged_at").notNull().default(now),
+    contactedAt: text("contacted_at"),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.cnpj] }),
+    index("leads_status_idx").on(t.projectId, t.status),
+  ]
+);
+
+/**
  * Background work. One row per run, progress written as it goes.
  *
  * `jobs_one_running_idx` is a partial unique index: two fast clicks cannot start

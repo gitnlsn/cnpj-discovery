@@ -12,6 +12,7 @@ const TABS = [
   { href: "/discovery", label: "Descoberta" },
   { href: "/enrichment", label: "Enriquecimento" },
   { href: "/scoring", label: "Pontuação" },
+  { href: "/leads", label: "Leads" },
 ];
 
 export function Tabs() {

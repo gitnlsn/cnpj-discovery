@@ -309,6 +309,45 @@ export class HostThrottle {
   }
 }
 
+/**
+ * Turns a fetch failure into something a person can act on.
+ *
+ * Node's fetch reports every network problem as the string "fetch failed" and
+ * hides the real reason in `cause`. That is worse than useless here: "the
+ * domain does not exist" means the e-mail guess was wrong, while "connection
+ * refused" means the guess was right and the site is down — and those lead to
+ * opposite decisions about the lead.
+ */
+export function describeFetchError(err: unknown, timeoutMs: number): string {
+  const e = err as Error & { cause?: { code?: string; message?: string } };
+  if (e?.name === "AbortError") return `timeout após ${timeoutMs}ms`;
+
+  const code = e?.cause?.code;
+  switch (code) {
+    case "ENOTFOUND":
+      return "domínio não existe";
+    case "ECONNREFUSED":
+      return "conexão recusada";
+    case "ECONNRESET":
+      return "conexão interrompida pelo servidor";
+    case "ETIMEDOUT":
+      return "servidor não respondeu";
+    case "EAI_AGAIN":
+      return "falha de DNS";
+    case "CERT_HAS_EXPIRED":
+      return "certificado HTTPS vencido";
+    case "DEPTH_ZERO_SELF_SIGNED_CERT":
+    case "SELF_SIGNED_CERT_IN_CHAIN":
+      return "certificado HTTPS não confiável";
+    case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+      return "certificado HTTPS incompleto";
+    default:
+      break;
+  }
+  const detail = e?.cause?.message ?? e?.message ?? String(err);
+  return detail === "fetch failed" ? "site inacessível" : detail.slice(0, 200);
+}
+
 // ------------------------------------------------------------------- crawl
 
 export interface CrawlOptions {
@@ -492,10 +531,34 @@ export async function crawlSite(
       signals.isHttps = signals.finalUrl.startsWith("https://");
     }
   } catch (err) {
-    const e = err as Error;
-    signals.error = e.name === "AbortError" ? `timeout após ${timeoutMs}ms` : e.message;
+    signals.error = describeFetchError(err, timeoutMs);
     signals.isDead = true;
   }
 
   return signals;
+}
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight.
+ *
+ * Results keep the input order, which matters because the caller writes them
+ * back against a list it already has. A rejection propagates: `crawlSite` never
+ * throws, so anything that gets here is a bug, not a dead website.
+ */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
