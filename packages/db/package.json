@@ -10,7 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "migrate": "tsx src/migrate.ts",
+    "migrate": "tsx --env-file-if-exists=../../.env src/migrate.ts",
     "test": "tsx --test --test-reporter=spec \"test/**/*.test.ts\""
   },
   "dependencies": {

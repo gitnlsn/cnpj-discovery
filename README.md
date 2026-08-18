@@ -17,6 +17,11 @@ diferentes, e obrigava a navegar para trocar de verbo.
 **Custo: R$ 0.** Os dados da Receita são públicos e os modelos padrão do OpenRouter são
 gratuitos. A única etapa que gastaria dinheiro — Google Places — vem desligada.
 
+O `.env` fica na **raiz do repositório**, não em `apps/web`. O Next lê `.env` a
+partir da própria pasta do app, então `next.config.ts` carrega o da raiz
+explicitamente — e os scripts usam `--env-file-if-exists`. Em ambos os casos uma
+variável já presente no shell continua ganhando do arquivo.
+
 ```bash
 pnpm install
 cp .env.example .env      # preencha OPEN_ROUTER_API_KEY
