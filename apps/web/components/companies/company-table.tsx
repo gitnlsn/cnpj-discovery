@@ -141,9 +141,12 @@ export function CompanyTable({
   const allChecked = rows.every((r) => selected.has(r.company.cnpj));
 
   return (
-    <div className="max-h-[calc(100svh-13rem)] overflow-auto rounded-md border">
-      <Table className="table-dense">
-        <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/70">
+    <div className="rounded-md border">
+      <Table
+        className="table-dense"
+        containerClassName="max-h-[calc(100svh-13rem)] overflow-auto rounded-md"
+      >
+        <TableHeader className="sticky top-0 z-10 bg-muted">
           <TableRow>
             <TableHead className="w-9">
               <Checkbox

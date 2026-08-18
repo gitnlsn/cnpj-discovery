@@ -12,7 +12,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -209,84 +208,82 @@ export function AddCompaniesDialog({
               </Button>
             </div>
 
-            <ScrollArea className="h-[52svh]">
-              {results.isLoading ? (
-                <div className="space-y-1.5 p-4">
-                  {Array.from({ length: 10 }, (_, i) => (
-                    <Skeleton key={i} className="h-8 w-full" />
-                  ))}
-                </div>
-              ) : rows.length === 0 ? (
-                <EmptyState
-                  icon={Search}
-                  title="Nenhuma empresa com esses filtros"
-                  description="Afrouxe a UF, a data de abertura, ou desmarque “só com telefone”."
-                />
-              ) : (
-                <Table className="table-dense">
-                  <TableHeader className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
-                    <TableRow>
-                      <TableHead className="w-9" />
-                      <TableHead className="min-w-[20rem]">nome</TableHead>
-                      <TableHead className="w-20">cnae</TableHead>
-                      <TableHead className="w-32">local</TableHead>
-                      <TableHead className="w-24">aberta</TableHead>
-                      <TableHead className="w-36">telefone</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {rows.map((c) => (
-                      <TableRow
-                        key={c.cnpj}
-                        data-state={picked.has(c.cnpj) ? "selected" : undefined}
-                        onClick={() => toggle(c.cnpj)}
-                        className="cursor-pointer"
-                      >
-                        <TableCell onClick={(e) => e.stopPropagation()}>
-                          <Checkbox
-                            checked={picked.has(c.cnpj)}
-                            onCheckedChange={() => toggle(c.cnpj)}
-                          />
-                        </TableCell>
-                        <TableCell className="max-w-[26rem]">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate">
-                              {c.nomeFantasia ?? c.razaoSocial ?? (
-                                <span className="text-muted-foreground">(sem nome)</span>
-                              )}
-                            </span>
-                            {c.mei && (
-                              <Badge variant="outline" className="shrink-0 text-[10px]">
-                                MEI
-                              </Badge>
+            {results.isLoading ? (
+              <div className="space-y-1.5 p-4">
+                {Array.from({ length: 10 }, (_, i) => (
+                  <Skeleton key={i} className="h-8 w-full" />
+                ))}
+              </div>
+            ) : rows.length === 0 ? (
+              <EmptyState
+                icon={Search}
+                title="Nenhuma empresa com esses filtros"
+                description="Afrouxe a UF, a data de abertura, ou desmarque “só com telefone”."
+              />
+            ) : (
+              <Table className="table-dense" containerClassName="h-[52svh] overflow-auto">
+                <TableHeader className="sticky top-0 z-10 bg-muted">
+                  <TableRow>
+                    <TableHead className="w-9" />
+                    <TableHead className="min-w-[20rem]">nome</TableHead>
+                    <TableHead className="w-20">cnae</TableHead>
+                    <TableHead className="w-32">local</TableHead>
+                    <TableHead className="w-24">aberta</TableHead>
+                    <TableHead className="w-36">telefone</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((c) => (
+                    <TableRow
+                      key={c.cnpj}
+                      data-state={picked.has(c.cnpj) ? "selected" : undefined}
+                      onClick={() => toggle(c.cnpj)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={picked.has(c.cnpj)}
+                          onCheckedChange={() => toggle(c.cnpj)}
+                        />
+                      </TableCell>
+                      <TableCell className="max-w-[26rem]">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate">
+                            {c.nomeFantasia ?? c.razaoSocial ?? (
+                              <span className="text-muted-foreground">(sem nome)</span>
                             )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{c.cnae}</TableCell>
-                        <TableCell className="text-xs">
-                          {c.municipio ?? "?"}/{c.uf}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {c.dataInicioAtividade ?? "—"}
-                        </TableCell>
-                        <TableCell>
-                          {c.phone ? (
-                            <span className="font-mono text-xs">
-                              {c.phone.e164}
-                              <span className="ml-1 text-[10px] text-muted-foreground">
-                                {c.phone.isMobile ? "cel" : "fixo"}
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
+                          </span>
+                          {c.mei && (
+                            <Badge variant="outline" className="shrink-0 text-[10px]">
+                              MEI
+                            </Badge>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </ScrollArea>
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{c.cnae}</TableCell>
+                      <TableCell className="text-xs">
+                        {c.municipio ?? "?"}/{c.uf}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {c.dataInicioAtividade ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        {c.phone ? (
+                          <span className="font-mono text-xs">
+                            {c.phone.e164}
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              {c.phone.isMobile ? "cel" : "fixo"}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
 
             {/*
               A plain div, not DialogFooter. That component ships `-mx-4 -mb-4`
@@ -296,7 +293,7 @@ export function AddCompaniesDialog({
               It was only contributing a border and a flex row.
             */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-xl border-t bg-muted/50 px-6 py-3">
-              <p className="text-xs text-muted-foreground">
+              <p className="min-w-0 flex-1 text-xs text-muted-foreground">
                 Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
                 a linha aparecer na lista.
                 <span className="ml-1">

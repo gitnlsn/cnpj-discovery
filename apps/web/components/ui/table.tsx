@@ -4,9 +4,27 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+/**
+ * `containerClassName` is a local addition to the generated component.
+ *
+ * The wrapper is `overflow-x-auto`, and CSS computes `overflow-y` to `auto`
+ * alongside it — which silently makes this div the containing block for any
+ * `position: sticky` inside the table. A sticky header then pins to a box that
+ * never scrolls vertically and rides away with the rows.
+ *
+ * Letting the caller own the wrapper is what makes a sticky header possible:
+ * pass the height and `overflow-auto` here, not to an outer element.
+ */
+function Table({
+  className,
+  containerClassName,
+  ...props
+}: React.ComponentProps<"table"> & { containerClassName?: string }) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
+    <div
+      data-slot="table-container"
+      className={cn("relative w-full overflow-x-auto", containerClassName)}
+    >
       <table
         data-slot="table"
         className={cn("w-full caption-bottom text-sm", className)}
