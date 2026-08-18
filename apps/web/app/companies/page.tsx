@@ -21,7 +21,7 @@ import {
 import { CompanyTable } from "@/components/companies/company-table";
 import { CompanyDetailSheet } from "@/components/companies/company-detail-sheet";
 import { SelectionBar } from "@/components/companies/selection-bar";
-import { AddCompaniesSheet } from "@/components/companies/add-companies-sheet";
+import { AddCompaniesDialog } from "@/components/companies/add-companies-dialog";
 
 /** "" means no opinion; the query omits the filter entirely. */
 const tri = (v: string) => (v === "" ? undefined : v === "sim");
@@ -223,7 +223,7 @@ function CompaniesPage() {
         onOpenChange={(open) => !open && setDetail(null)}
       />
 
-      <AddCompaniesSheet projectId={pid} open={adding} onOpenChange={setAdding} />
+      <AddCompaniesDialog projectId={pid} open={adding} onOpenChange={setAdding} />
     </div>
   );
 }

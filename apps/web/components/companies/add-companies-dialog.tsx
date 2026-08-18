@@ -21,13 +21,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -43,15 +43,16 @@ type Order = "founded-desc" | "founded-asc" | "name" | "capital-desc";
 /**
  * Search the Receita base and pull companies into the project.
  *
- * A Sheet, not a panel wedged into the middle of the page. This is the only
- * place anything from the 12M-row Parquet base is written to the app's own
- * database, and it deserves its own surface rather than shoving the table you
- * were reading down the screen.
+ * A centred modal, not a panel wedged into the page. This is the only place
+ * anything from the 12M-row Parquet base is written to the app's own database,
+ * and it is a decision you make in one sitting — so it gets the middle of the
+ * screen and enough width for the columns to breathe, rather than a side panel
+ * that squeezes the table into overlapping text.
  *
  * Only the project's chosen CNAEs are offered, so a code the model invented
  * cannot reach here — it was already refused on the project tab.
  */
-export function AddCompaniesSheet({
+export function AddCompaniesDialog({
   projectId,
   open,
   onOpenChange,
@@ -124,11 +125,14 @@ export function AddCompaniesSheet({
     });
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
-        <SheetHeader className="border-b">
-          <SheetTitle>Adicionar empresas da base</SheetTitle>
-          <SheetDescription>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex max-h-[88svh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+        style={{ width: "min(72rem, 94vw)" }}
+      >
+        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
+          <DialogTitle>Adicionar empresas da base</DialogTitle>
+          <DialogDescription>
             {reach.data ? (
               <>
                 <b className="tabular">{nf(reach.data.total)}</b> empresas nos CNAEs escolhidos
@@ -139,8 +143,8 @@ export function AddCompaniesSheet({
             ) : (
               "Busca na base local da Receita. Nada é gravado até você adicionar."
             )}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         {chosen.length === 0 ? (
           <EmptyState
@@ -150,7 +154,7 @@ export function AddCompaniesSheet({
           />
         ) : (
           <>
-            <div className="flex flex-wrap items-end gap-2 border-b px-4 py-3">
+            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b px-6 py-3">
               <div className="grid gap-1">
                 <Label className="text-xs">Ordem</Label>
                 <Select value={order} onValueChange={(v) => setOrder(v as Order)}>
@@ -206,7 +210,7 @@ export function AddCompaniesSheet({
               </Button>
             </div>
 
-            <ScrollArea className="h-[calc(100svh-16rem)]">
+            <ScrollArea className="max-h-[55vh] min-h-[14rem] flex-1">
               {results.isLoading ? (
                 <div className="space-y-1.5 p-4">
                   {Array.from({ length: 10 }, (_, i) => (
@@ -224,9 +228,9 @@ export function AddCompaniesSheet({
                   <TableHeader className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
                     <TableRow>
                       <TableHead className="w-9" />
-                      <TableHead>nome</TableHead>
+                      <TableHead className="min-w-[20rem]">nome</TableHead>
                       <TableHead className="w-20">cnae</TableHead>
-                      <TableHead className="w-28">local</TableHead>
+                      <TableHead className="w-32">local</TableHead>
                       <TableHead className="w-24">aberta</TableHead>
                       <TableHead className="w-36">telefone</TableHead>
                     </TableRow>
@@ -245,17 +249,19 @@ export function AddCompaniesSheet({
                             onCheckedChange={() => toggle(c.cnpj)}
                           />
                         </TableCell>
-                        <TableCell className="max-w-[18rem]">
-                          <span className="truncate">
-                            {c.nomeFantasia ?? c.razaoSocial ?? (
-                              <span className="text-muted-foreground">(sem nome)</span>
+                        <TableCell className="max-w-[26rem]">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate">
+                              {c.nomeFantasia ?? c.razaoSocial ?? (
+                                <span className="text-muted-foreground">(sem nome)</span>
+                              )}
+                            </span>
+                            {c.mei && (
+                              <Badge variant="outline" className="shrink-0 text-[10px]">
+                                MEI
+                              </Badge>
                             )}
-                          </span>
-                          {c.mei && (
-                            <Badge variant="outline" className="ml-1.5 text-[10px]">
-                              MEI
-                            </Badge>
-                          )}
+                          </div>
                         </TableCell>
                         <TableCell className="font-mono text-xs">{c.cnae}</TableCell>
                         <TableCell className="text-xs">
@@ -283,7 +289,7 @@ export function AddCompaniesSheet({
               )}
             </ScrollArea>
 
-            <SheetFooter className="flex-row flex-wrap items-center justify-between gap-3 border-t">
+            <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-3 border-t px-6 py-3 sm:justify-between">
               <p className="text-xs text-muted-foreground">
                 Ao adicionar, o site de cada uma é visitado e a empresa é pontuada — é o que faz
                 a linha aparecer na lista.
@@ -304,10 +310,10 @@ export function AddCompaniesSheet({
                   {add.isPending ? "Adicionando…" : `Adicionar e processar ${picked.size}`}
                 </Button>
               </div>
-            </SheetFooter>
+            </DialogFooter>
           </>
         )}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
