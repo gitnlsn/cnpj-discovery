@@ -79,7 +79,11 @@ export function SelectionBar({
     ...trpc.jobs.status.queryOptions(),
     refetchInterval: (q) => (q.state.data?.current ? 1200 : 5000),
   });
-  const running = jobs.data?.current ?? null;
+  // A continuous run has its own bar with its own stop button; showing it here
+  // too would give two controls for one job, and this one would call it
+  // "pontuando" when it is doing rather more than that.
+  const currentJob = jobs.data?.current ?? null;
+  const running = currentJob?.kind === "continuous" ? null : currentJob;
   const progress = (running?.progress ?? null) as { done: number; total: number } | null;
   const usage = useQuery(trpc.enrichment.usage.queryOptions());
 

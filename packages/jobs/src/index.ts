@@ -12,7 +12,8 @@ import { jobs, type Db } from "@cnpj/db";
  * time. So they run in-process and there is no argv to escape.
  */
 
-export type JobKind = "compile" | "discover" | "crawl" | "score" | "places" | "pipeline";
+export type JobKind =
+  "compile" | "discover" | "crawl" | "score" | "places" | "pipeline" | "continuous";
 
 export interface JobProgress {
   done: number;

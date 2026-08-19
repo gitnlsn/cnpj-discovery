@@ -22,6 +22,7 @@ import { CompanyTable } from "@/components/companies/company-table";
 import { CompanyDetailSheet } from "@/components/companies/company-detail-sheet";
 import { SelectionBar } from "@/components/companies/selection-bar";
 import { AddCompaniesDialog } from "@/components/companies/add-companies-dialog";
+import { ContinuousBar } from "@/components/companies/continuous-bar";
 
 /** "" means no opinion; the query omits the filter entirely. */
 const tri = (v: string) => (v === "" ? undefined : v === "sim");
@@ -137,6 +138,8 @@ function CompaniesPage() {
           <Stat label="marcadas" value={summary.data?.flagged ?? null} />
         </div>
       </div>
+
+      <ContinuousBar />
 
       <CompanyToolbar
         projectId={pid}

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Search, TriangleAlert } from "lucide-react";
+import { Database, Infinity as InfinityIcon, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc";
 import { errorMessage, nf } from "@/lib/format";
@@ -120,6 +120,16 @@ export function AddCompaniesDialog({
   const reach = useQuery({
     ...trpc.discovery.reach.queryOptions({ filters, excludeProjectId: projectId }),
     enabled: open && chosen.length > 0,
+  });
+
+  const continuous = useMutation({
+    ...trpc.companies.processContinuous.mutationOptions(),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+      toast.success("Processamento contínuo iniciado. Pare pela aba Empresas.");
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error(errorMessage(e) ?? "Falhou."),
   });
 
   const runPipeline = useMutation({
@@ -410,6 +420,23 @@ export function AddCompaniesDialog({
                 </span>
               </p>
               <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  disabled={continuous.isPending || rows.length === 0}
+                  onClick={() =>
+                    continuous.mutate({
+                      projectId,
+                      filters,
+                      order,
+                      depth: DEEP_CRAWL,
+                      sourcePeriod: "2026-08",
+                    })
+                  }
+                  title="Puxa uma empresa por vez com estes filtros, sem parar, até você mandar parar"
+                >
+                  <InfinityIcon className="size-3.5" />
+                  Processamento contínuo
+                </Button>
                 <span className="tabular text-sm text-muted-foreground">
                   {picked.size} selecionada{picked.size === 1 ? "" : "s"}
                 </span>

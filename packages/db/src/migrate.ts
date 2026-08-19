@@ -138,7 +138,7 @@ CREATE INDEX IF NOT EXISTS leads_status_idx ON leads (project_id, status);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline')),
+  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline','continuous')),
   project_id  TEXT,
   status      TEXT NOT NULL CHECK (status IN ('running','done','failed','cancelled')),
   progress    TEXT,
@@ -171,7 +171,7 @@ function upgradeJobsKind(sqlite: Database.Database): void {
   const row = sqlite
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")
     .get() as { sql?: string } | undefined;
-  if (!row?.sql || row.sql.includes("'pipeline'")) return;
+  if (!row?.sql || row.sql.includes("'continuous'")) return;
   sqlite.exec("DROP TABLE jobs;");
 }
 

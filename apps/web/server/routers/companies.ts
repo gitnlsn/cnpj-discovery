@@ -4,6 +4,7 @@ import { companies, crawls, scores, leads, contacts, placesLookups } from "@cnpj
 import { websiteFromEmail, type SiteSignals } from "@cnpj/core";
 import { router, publicProcedure } from "../trpc";
 import { runPipeline } from "../pipeline";
+import { runContinuous } from "../continuous";
 
 /**
  * One query behind the companies view.
@@ -14,6 +15,40 @@ import { runPipeline } from "../pipeline";
  * state, revealed contacts — and the view decides what to show and what to run.
  */
 const LEAD_STATUSES = ["flagged", "contacted", "replied", "won", "lost"] as const;
+
+/**
+ * The same shape the discovery router validates, restated here because the
+ * continuous job takes it too. `.strict()` for the same reason: a filter the UI
+ * sends but the schema forgot would be dropped in silence and the loop would
+ * churn through companies nobody asked for.
+ */
+const continuousFilters = z
+  .object({
+    cnae: z
+      .array(z.string().regex(/^\d{2,7}$/))
+      .max(40)
+      .optional(),
+    uf: z.array(z.string().length(2)).max(27).optional(),
+    foundedFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    foundedTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    hasPhone: z.boolean().optional(),
+    hasEmail: z.boolean().optional(),
+    ownDomainEmail: z.boolean().optional(),
+    isMobile: z.boolean().optional(),
+    mei: z.boolean().optional(),
+    matrizOnly: z.boolean().optional(),
+    porte: z.array(z.string().max(2)).max(5).optional(),
+    naturezaPrefix: z.array(z.string().max(4)).max(8).optional(),
+    minCapitalSocial: z.number().min(0).optional(),
+    q: z.string().max(120).optional(),
+  })
+  .strict();
 
 export const companiesRouter = router({
   list: publicProcedure
@@ -204,6 +239,27 @@ export const companiesRouter = router({
       })
     )
     .mutation(({ ctx, input }) => runPipeline(ctx.db, input)),
+
+  /**
+   * Keeps pulling one company at a time from the base until told to stop.
+   *
+   * The filters are the ones from the add dialog, captured when the job starts.
+   * It stops on cancel, on running out of matches, on the daily model budget,
+   * or on repeated model failures — and the log says which.
+   */
+  processContinuous: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        filters: continuousFilters,
+        order: z
+          .enum(["founded-desc", "founded-asc", "name", "capital-desc"])
+          .default("founded-desc"),
+        depth: z.number().int().min(0).max(5).default(5),
+        sourcePeriod: z.string().max(10).optional(),
+      })
+    )
+    .mutation(({ ctx, input }) => runContinuous(ctx.db, input)),
 
   /** Removes companies from the project. Cascade-free: leads/scores stay keyed. */
   remove: publicProcedure
