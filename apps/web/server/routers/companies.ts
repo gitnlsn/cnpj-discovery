@@ -58,8 +58,15 @@ export const companiesRouter = router({
         q: z.string().max(120).optional(),
         cnae: z.string().max(7).optional(),
         uf: z.string().length(2).optional(),
-        /** flagged = in the leads table at all; a status narrows it further. */
-        flag: z.union([z.enum(LEAD_STATUSES), z.literal("any"), z.literal("none")]).optional(),
+        /**
+         * Lead states to keep, any number of them. "none" is "never flagged",
+         * which is a state like the others and belongs in the same list.
+         * Omitted or empty means every company, flagged or not.
+         */
+        flags: z
+          .array(z.union([z.enum(LEAD_STATUSES), z.literal("none")]))
+          .max(LEAD_STATUSES.length + 1)
+          .optional(),
         crawled: z.boolean().optional(),
         scored: z.boolean().optional(),
         /**
@@ -109,10 +116,8 @@ export const companiesRouter = router({
           const hay = `${c.nomeFantasia ?? ""} ${c.razaoSocial ?? ""} ${c.cnpj}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (input.flag === "none" && r.leads) return false;
-        if (input.flag === "any" && !r.leads) return false;
-        if (input.flag && input.flag !== "any" && input.flag !== "none") {
-          if (r.leads?.status !== input.flag) return false;
+        if (input.flags?.length && !input.flags.includes(r.leads?.status ?? "none")) {
+          return false;
         }
         if (input.crawled === true && !r.crawls) return false;
         if (input.crawled === false && r.crawls) return false;

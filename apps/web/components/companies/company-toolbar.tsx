@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, Plus, Search, SlidersHorizontal, X } from "lucide-react";
-import { LEAD_LABEL, LEAD_STATUSES } from "@/lib/format";
+import { LEAD_LABEL, LEAD_STATUSES, type LeadFilter } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,14 +14,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Field, Choices } from "@/components/filter-controls";
+import { Field, Choices, MultiChoices } from "@/components/filter-controls";
 import { CnaeCombobox } from "./cnae-combobox";
 
 export interface Filters {
   q: string;
   cnae: string;
   uf: string;
-  flag: string;
+  /** Lead states to keep. Empty = todas. "none" is "não marcadas". */
+  flags: LeadFilter[];
   crawled: string;
   /** "" = processadas (padrão) · "nao" = as que faltam · "todas" = tudo */
   situacao: "" | "nao" | "todas";
@@ -32,7 +33,7 @@ export const EMPTY_FILTERS: Filters = {
   q: "",
   cnae: "",
   uf: "",
-  flag: "",
+  flags: [],
   crawled: "",
   situacao: "",
   order: "score",
@@ -45,7 +46,7 @@ export const EMPTY_FILTERS: Filters = {
  * put a badge on a button that does not contain it.
  */
 function activeCount(f: Filters): number {
-  return [f.uf, f.flag, f.crawled, f.situacao].filter(Boolean).length;
+  return [f.uf, f.flags.length ? "sim" : "", f.crawled, f.situacao].filter(Boolean).length;
 }
 
 export function CompanyToolbar({
@@ -141,14 +142,15 @@ export function CompanyToolbar({
               />
             </Field>
 
-            <Field label="Marcação">
-              <Choices
-                value={filters.flag}
-                onChange={(v) => set("flag", v)}
+            <Field
+              label="Marcação"
+              hint="Escolha quantas quiser; nenhuma escolhida traz todas."
+            >
+              <MultiChoices
+                value={filters.flags}
+                onChange={(v) => set("flags", v as LeadFilter[])}
                 options={[
-                  { value: "", label: "todas" },
                   { value: "none", label: "não marcadas" },
-                  { value: "any", label: "marcadas" },
                   ...LEAD_STATUSES.map((st) => ({ value: st, label: LEAD_LABEL[st] })),
                 ]}
               />

@@ -21,6 +21,8 @@ import {
   type SiteSignals,
 } from "@cnpj/core";
 import { placesFor } from "../../lib/places";
+import { provider } from "../../lib/llm";
+import { remainingToday, dailyLimit } from "../../lib/llm-budget";
 import { router, publicProcedure, notFound, badRequest, type Context } from "../trpc";
 
 const cnpj = z.string().regex(/^\d{14}$/);
@@ -470,6 +472,11 @@ export const enrichmentRouter = router({
       // Left this month on the free allowance. Zero means the button stops.
       placesRemaining: places ? await places.budget.remaining(PLACES_SKU) : 0,
       placesMonthly: FREE_MONTHLY[PLACES_SKU] ?? 0,
+      // Which model provider is in play, and what is left of today's allowance.
+      // The continuous run stops on this, so it should not be a surprise.
+      llmProvider: provider(),
+      llmRemaining: await remainingToday(ctx.db),
+      llmDaily: dailyLimit(),
     };
   }),
 });

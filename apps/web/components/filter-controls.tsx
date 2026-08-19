@@ -73,3 +73,59 @@ export function Choices({
     </ToggleGroup>
   );
 }
+
+/**
+ * The same row of options, but any number of them at once.
+ *
+ * An empty selection means "todas" — no filter — and the leading chip both
+ * shows that state and clears back to it. Without that chip there is no way to
+ * tell "I want everything" from "I have not chosen yet", and no single click
+ * that gets you back.
+ */
+export function MultiChoices({
+  value,
+  onChange,
+  options,
+  allLabel = "todas",
+  className,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  options: { value: string; label: string }[];
+  allLabel?: string;
+  className?: string;
+}) {
+  return (
+    <ToggleGroup
+      type="multiple"
+      value={value.length ? value : ["__all__"]}
+      // "todas" only appears in the incoming list when it was just clicked. If
+      // something was selected, that click means "clear"; otherwise it is the
+      // held-open state tagging along and the real choice is the rest.
+      onValueChange={(next) =>
+        onChange(
+          next.includes("__all__") && value.length ? [] : next.filter((v) => v !== "__all__")
+        )
+      }
+      className={cn("flex flex-wrap justify-start gap-1", className)}
+      variant="outline"
+      size="sm"
+    >
+      <ToggleGroupItem
+        value="__all__"
+        className="h-7 rounded-md border px-2 text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+      >
+        {allLabel}
+      </ToggleGroupItem>
+      {options.map((o) => (
+        <ToggleGroupItem
+          key={o.value}
+          value={o.value}
+          className="h-7 rounded-md border px-2 text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+        >
+          {o.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}

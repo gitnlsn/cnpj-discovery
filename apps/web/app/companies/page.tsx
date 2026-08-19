@@ -51,7 +51,7 @@ function CompaniesPage() {
       ...(filters.q ? { q: filters.q } : {}),
       ...(filters.cnae ? { cnae: filters.cnae } : {}),
       ...(filters.uf.length === 2 ? { uf: filters.uf } : {}),
-      ...(filters.flag ? { flag: filters.flag as "any" } : {}),
+      ...(filters.flags.length ? { flags: filters.flags } : {}),
       ...(tri(filters.crawled) !== undefined ? { crawled: tri(filters.crawled) } : {}),
       // "" is the default and means processadas; "todas" opts out entirely.
       ...(filters.situacao === "todas" ? {} : { processed: filters.situacao !== "nao" }),
@@ -121,11 +121,22 @@ function CompaniesPage() {
   const rows = list.data?.rows ?? [];
   const pid = projectId;
 
+  // The CSV is the list, not a separate report: it carries whatever the toolbar
+  // is filtering by, so the file matches what is on screen.
+  const exportParams = new URLSearchParams([
+    ...Object.entries({
+      q: filters.q,
+      cnae: filters.cnae,
+      uf: filters.uf.length === 2 ? filters.uf : "",
+      crawled: filters.crawled,
+      situacao: filters.situacao,
+      order: filters.order,
+    }).filter(([, v]) => v !== ""),
+    // Repeated rather than joined: one key per chosen state.
+    ...filters.flags.map((f) => ["flag", f]),
+  ]).toString();
   const exportUrl =
-    `/api/export/${encodeURIComponent(pid)}` +
-    (filters.flag && filters.flag !== "any" && filters.flag !== "none"
-      ? `?status=${filters.flag}`
-      : "");
+    `/api/export/${encodeURIComponent(pid)}` + (exportParams ? `?${exportParams}` : "");
 
   return (
     <div className="space-y-3 pb-24">

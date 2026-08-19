@@ -27,6 +27,8 @@ export function ContinuousBar() {
   const current = jobs.data?.current ?? null;
   const running = current?.kind === "continuous" ? current : null;
 
+  const usage = useQuery(trpc.enrichment.usage.queryOptions());
+
   const cancel = useMutation({
     ...trpc.jobs.cancel.mutationOptions(),
     onSuccess: () => {
@@ -51,6 +53,13 @@ export function ContinuousBar() {
           <b>Processamento contínuo</b> em andamento ·{" "}
           <b className="tabular">{nf(progress?.done ?? 0)}</b> empresas
           {progress?.note ? ` · ${progress.note}` : ""}
+          {usage.data?.llmProvider ? (
+            <span className="text-muted-foreground">
+              {" · "}
+              {usage.data.llmProvider} · {nf(usage.data.llmRemaining)} de{" "}
+              {nf(usage.data.llmDaily)} requisições hoje
+            </span>
+          ) : null}
         </span>
         <Button
           variant="destructive"

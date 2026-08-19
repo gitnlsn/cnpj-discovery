@@ -11,10 +11,14 @@ import {
   scoreCompanies,
   HostThrottle,
   type ProjectSpec,
+  classifyRateLimit,
+  backoffMs,
+  dailyLimitAdvice,
   type ScoreCandidate,
   type SiteSignals,
+  type LlmPort,
 } from "@cnpj/core";
-import { requireLlm } from "../lib/llm";
+import { requireLlm, provider } from "../lib/llm";
 import { recordLlm, remainingToday, dailyLimit } from "../lib/llm-budget";
 
 /**
@@ -32,7 +36,27 @@ import { recordLlm, remainingToday, dailyLimit } from "../lib/llm-budget";
  *   · the daily model budget is spent
  *   · the model failed repeatedly, which usually means a rate limit
  */
-const MAX_CONSECUTIVE_FAILURES = 3;
+/**
+ * How many transient rate-limit waits to sit through before giving up.
+ *
+ * Generous on purpose. A per-minute ceiling recovers within a minute, so
+ * quitting after three was throwing away a run that only needed to wait — the
+ * loop ended after a few dozen companies when it could have kept going. The
+ * daily cap is handled separately and stops immediately, because no amount of
+ * waiting fixes it before tomorrow.
+ */
+const MAX_TRANSIENT_WAITS = 8;
+/** Failures that are not rate limits — a broken key, a bad schema. */
+const MAX_HARD_FAILURES = 3;
+
+/** A sleep that notices when you press stop. */
+async function pausableSleep(ms: number, cancelled: () => boolean): Promise<void> {
+  const step = 1000;
+  for (let waited = 0; waited < ms; waited += step) {
+    if (cancelled()) return;
+    await new Promise((r) => setTimeout(r, Math.min(step, ms - waited)));
+  }
+}
 
 export interface ContinuousInput {
   projectId: string;
@@ -67,10 +91,18 @@ export async function runContinuous(
     );
 
     const throttle = new HostThrottle(1000);
+    // Built at most once, on purpose. The client spaces its own calls to stay
+    // under the provider's per-minute ceiling, and it does that by remembering
+    // when it last called — so rebuilding it per company (as this used to)
+    // resets that memory every time and the spacing never happens. Lazy so a
+    // run without a key still crawls instead of dying at the first line.
+    let port: LlmPort | null = null;
+    const llmPort = () => (port ??= requireLlm());
     let done = 0;
     let scored = 0;
     let noSite = 0;
-    let failures = 0;
+    let transientWaits = 0;
+    let hardFailures = 0;
     let stopped = "você mandou parar";
 
     ctx.log(
@@ -221,7 +253,7 @@ export async function runContinuous(
           },
         };
 
-        const [result] = await scoreCompanies(requireLlm(), spec, [candidate], {
+        const [result] = await scoreCompanies(llmPort(), spec, [candidate], {
           batchSize: 1,
         });
         await recordLlm(db, 1);
@@ -247,14 +279,38 @@ export async function runContinuous(
             .values({ projectId: input.projectId, cnpj: next.cnpj, ...row })
             .onConflictDoUpdate({ target: [scores.projectId, scores.cnpj], set: row });
 
-          if (result.error) {
-            failures++;
-            if (failures >= MAX_CONSECUTIVE_FAILURES) {
-              stopped = `o modelo falhou ${failures} vezes seguidas — provavelmente limite de requisições`;
+          const limit = classifyRateLimit(result.error);
+
+          if (limit === "daily") {
+            stopped = dailyLimitAdvice(provider());
+            break;
+          }
+
+          if (limit === "transient") {
+            // A per-minute ceiling. Wait it out and keep going: this company is
+            // left with its error recorded and will be picked up again, because
+            // a score row with `error` set is treated as unscored.
+            transientWaits++;
+            if (transientWaits > MAX_TRANSIENT_WAITS) {
+              stopped = `o modelo seguiu limitando depois de ${MAX_TRANSIENT_WAITS} esperas`;
+              break;
+            }
+            const wait = backoffMs(transientWaits);
+            ctx.log(
+              `limite temporário do modelo · esperando ${Math.round(wait / 1000)}s ` +
+                `(${transientWaits}/${MAX_TRANSIENT_WAITS})`
+            );
+            seen.delete(next.cnpj);
+            await pausableSleep(wait, () => ctx.cancelled());
+          } else if (result.error) {
+            hardFailures++;
+            if (hardFailures >= MAX_HARD_FAILURES) {
+              stopped = `o modelo falhou ${hardFailures} vezes seguidas: ${result.error.slice(0, 120)}`;
               break;
             }
           } else {
-            failures = 0;
+            transientWaits = 0;
+            hardFailures = 0;
             scored++;
           }
         }

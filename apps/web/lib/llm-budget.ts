@@ -1,6 +1,7 @@
 import "server-only";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { usage, type Db } from "@cnpj/db";
+import { provider } from "./llm";
 
 /**
  * A daily ceiling on model requests.
@@ -15,9 +16,18 @@ import { usage, type Db } from "@cnpj/db";
  */
 export const LLM_KIND = "llm.requests";
 
+/**
+ * A local ceiling, defaulted to whatever the chosen provider actually gives.
+ *
+ * OpenRouter's free models allow 50 a day; Gemini's free tier is several
+ * hundred per model. Defaulting both to 50 would have stopped a Gemini run
+ * eight times earlier than necessary. The provider still enforces its own
+ * limit — this is only so a runaway loop has a local brake as well.
+ */
 export function dailyLimit(): number {
-  const raw = Number(process.env.OPENROUTER_DAILY_REQUESTS);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50;
+  const raw = Number(process.env.LLM_DAILY_REQUESTS ?? process.env.OPENROUTER_DAILY_REQUESTS);
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  return provider() === "gemini" ? 1000 : 50;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);

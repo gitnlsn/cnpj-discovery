@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseProjectSpec, SpecError, tierFor, bestFit } from "../src/domain/spec";
 import { runProbes, extractText } from "../src/domain/probes";
+import { classifyRateLimit, backoffMs } from "../src/services/rateLimit";
 
 const minimal = {
   summary: "Sites para escolas",
@@ -179,4 +180,38 @@ test("the literal string 'null' is not data", () => {
   });
   assert.equal(spec.icpCoverage[0]?.mappedTo, "");
   assert.equal(spec.icpCoverage[1]?.mappedTo, "uf: SP");
+});
+
+test("os dois 429 do OpenRouter são coisas diferentes", () => {
+  // Tratar os dois como "desista" é o que fazia o processamento contínuo
+  // terminar depois de algumas dezenas de empresas.
+  const transitorio =
+    'OpenRouter 429: {"error":{"message":"Provider returned error","code":429,' +
+    '"metadata":{"raw":"google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly"}}}';
+  const diario =
+    'OpenRouter 429: {"error":{"message":"Rate limit exceeded: free-models-per-day. ' +
+    'Add 10 credits to unlock 1000 free model requests per day","code":429}}';
+
+  // As duas frases reais do Gemini para o teto diário.
+  const geminiDiario =
+    "Gemini 429: Quota exceeded for quota metric 'Generate requests per day'";
+  const geminiMetrica =
+    "Gemini 429: GenerateRequestsPerDayPerProjectPerModel-FreeTier exceeded";
+  const geminiMinuto =
+    "Gemini 429: Quota exceeded for quota metric 'Generate requests per minute'";
+
+  assert.equal(classifyRateLimit(transitorio), "transient");
+  assert.equal(classifyRateLimit(diario), "daily");
+  assert.equal(classifyRateLimit(geminiDiario), "daily");
+  assert.equal(classifyRateLimit(geminiMetrica), "daily");
+  assert.equal(classifyRateLimit(geminiMinuto), "transient");
+  assert.equal(classifyRateLimit("modelo não devolveu resultado para este CNPJ"), "none");
+  assert.equal(classifyRateLimit(null), "none");
+});
+
+test("o backoff cresce e para de crescer", () => {
+  assert.equal(backoffMs(1), 30_000);
+  assert.equal(backoffMs(2), 60_000);
+  assert.equal(backoffMs(3), 120_000);
+  assert.equal(backoffMs(10), 300_000, "não passa de 5 minutos");
 });

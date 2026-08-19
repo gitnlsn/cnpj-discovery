@@ -14,8 +14,14 @@ Duas abas, seguindo o modelo de dados e não o fluxo de processamento:
 Dividir por etapa dava quatro telas mostrando as mesmas linhas em estados
 diferentes, e obrigava a navegar para trocar de verbo.
 
-**Custo: R$ 0.** Os dados da Receita são públicos e os modelos padrão do OpenRouter são
-gratuitos. A única etapa que gastaria dinheiro — Google Places — vem desligada.
+**Custo: R$ 0.** Os dados da Receita são públicos e os modelos padrão são gratuitos
+nos dois provedores. A única etapa que gastaria dinheiro — Google Places — vem
+desligada.
+
+**Gemini ou OpenRouter**, o que estiver no `.env`. Com os dois, o Gemini ganha: o
+nível gratuito do OpenRouter dá 50 requisições por dia, que o processamento
+contínuo gasta em menos de uma hora, enquanto o do Gemini dá algumas centenas por
+modelo. `LLM_PROVIDER=openrouter` força o outro.
 
 O `.env` fica na **raiz do repositório**, não em `apps/web`. O Next lê `.env` a
 partir da própria pasta do app, então `next.config.ts` carrega o da raiz
@@ -24,7 +30,7 @@ variável já presente no shell continua ganhando do arquivo.
 
 ```bash
 pnpm install
-cp .env.example .env      # preencha OPEN_ROUTER_API_KEY
+cp .env.example .env      # preencha GEMINI_API_KEY (ou OPEN_ROUTER_API_KEY)
 pnpm data:sync            # baixa e converte a base (~14 min, 2,9 GB de download)
 pnpm db:migrate
 pnpm dev                  # http://localhost:3200
@@ -168,7 +174,7 @@ apps/web/           Next.js 16 (App Router) + tRPC 11
 packages/core/      domínio puro — sem I/O, sem process.env, sem console
   domain/           phone, probes, spec, prompt, icp
   usecases/         compileSpec, suggestCnaes, crawl, scoreCompanies
-  adapters/         openrouter
+  adapters/         openrouter, gemini
 packages/data/      DuckDB sobre Parquet + o sync da Receita
 packages/db/        SQLite (Drizzle) — só o que o app produz
 packages/jobs/      trabalho longo no processo, progresso na tabela jobs

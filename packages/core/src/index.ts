@@ -38,3 +38,15 @@ export {
   estimateCost,
   type BudgetCounters,
 } from "./services/budget";
+export {
+  classifyRateLimit,
+  backoffMs,
+  dailyLimitAdvice,
+  type RateLimitKind,
+} from "./services/rateLimit";
+export {
+  createGeminiLlm,
+  toGeminiSchema,
+  GEMINI_DEFAULT_MODELS,
+  GeminiError,
+} from "./adapters/gemini";

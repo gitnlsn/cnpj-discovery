@@ -13,6 +13,8 @@ export const LEAD_LABEL = {
 } as const;
 
 export type LeadStatus = keyof typeof LEAD_LABEL;
+/** A lead state to filter by. "none" — never marked — is one of them. */
+export type LeadFilter = LeadStatus | "none";
 export const LEAD_STATUSES = Object.keys(LEAD_LABEL) as LeadStatus[];
 
 export const LEAD_VARIANT: Record<LeadStatus, BadgeVariant> = {
