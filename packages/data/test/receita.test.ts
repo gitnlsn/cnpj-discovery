@@ -10,6 +10,7 @@ import {
   searchCnaes,
 } from "../src/receita";
 import { FREE_MAIL } from "@cnpj/core/domain";
+import { websiteFromEmail } from "@cnpj/core";
 
 /**
  * These run against the real Parquet dataset, not a fixture.
@@ -192,5 +193,65 @@ describe("filtros novos", { skip: hasDataset ? false : "rode pnpm data:sync" }, 
       limit: 30,
     });
     for (const r of rows) assert.ok((r.capitalSocial ?? 0) >= 100000);
+  });
+});
+
+describe("o filtro de site concorda com o crawler", { skip: hasDataset ? false : "rode pnpm data:sync" }, () => {
+  test("tudo que passa por ownDomainEmail o crawler aceita visitar", async () => {
+    // A regressão que isto trava: filtrar só por provedor gratuito deixava
+    // passar 43% de domínios de escritório de contabilidade, que o
+    // `websiteFromEmail` recusa. O filtro prometia um site alcançável e
+    // entregava o domínio do contador — e a empresa voltava do pipeline sem
+    // nota nenhuma.
+    const rows = await listCompanies({
+      filters: { cnae: ["8599"], ownDomainEmail: true, mei: false },
+      limit: 300,
+    });
+    assert.ok(rows.length > 50, "esperava amostra suficiente");
+    const recusados = rows.filter((r) => !websiteFromEmail(r.email));
+    assert.deepEqual(
+      recusados.map((r) => r.email),
+      [],
+      "o filtro passou domínios que o crawler não visitaria"
+    );
+  });
+
+  test("o filtro é mais estreito que 'tem e-mail'", async () => {
+    const comEmail = await countReach({ cnae: ["8599"], hasEmail: true });
+    const comSite = await countReach({ cnae: ["8599"], ownDomainEmail: true });
+    assert.ok(comSite.total > 0);
+    assert.ok(comSite.total < comEmail.total);
+  });
+});
+
+describe("exclusão de já-adicionadas", { skip: hasDataset ? false : "rode pnpm data:sync" }, () => {
+  test("excludeCnpjs tira exatamente as empresas pedidas", async () => {
+    const antes = await listCompanies({
+      filters: { cnae: ["8599"], hasPhone: true },
+      order: "founded-desc",
+      limit: 20,
+    });
+    assert.ok(antes.length >= 5);
+    const excluir = antes.slice(0, 3).map((r) => r.cnpj);
+
+    const depois = await listCompanies({
+      filters: { cnae: ["8599"], hasPhone: true, excludeCnpjs: excluir },
+      order: "founded-desc",
+      limit: 20,
+    });
+    for (const c of excluir) {
+      assert.ok(!depois.some((r) => r.cnpj === c), `${c} deveria ter saído da lista`);
+    }
+  });
+
+  test("a contagem cai junto, para o cabeçalho não mentir", async () => {
+    const rows = await listCompanies({
+      filters: { cnae: ["8599"], hasPhone: true },
+      limit: 5,
+    });
+    const excluir = rows.map((r) => r.cnpj);
+    const todas = await countReach({ cnae: ["8599"], hasPhone: true });
+    const menos = await countReach({ cnae: ["8599"], hasPhone: true, excludeCnpjs: excluir });
+    assert.equal(menos.total, todas.total - excluir.length);
   });
 });

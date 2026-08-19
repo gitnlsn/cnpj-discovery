@@ -294,6 +294,18 @@ export function CompanyDetailSheet({
               <TabsContent value="pontuacao">
                 {!score ? (
                   <p className="py-6 text-sm text-muted-foreground">Ainda não pontuada.</p>
+                ) : !score.model && !score.error ? (
+                  <div className="space-y-2 py-4">
+                    <Badge variant="outline">não pontuada — sem site</Badge>
+                    <p className="text-sm text-muted-foreground">
+                      Nenhuma página foi lida, então não havia evidência para pontuar. Nenhuma
+                      chamada ao modelo foi gasta.
+                    </p>
+                    <p className="text-sm">
+                      Para pontuar mesmo assim, use “Pontuar” na linha — pedir explicitamente é
+                      honrado.
+                    </p>
+                  </div>
                 ) : score.error ? (
                   <div className="space-y-2 py-4">
                     <Badge variant="destructive">a chamada falhou</Badge>

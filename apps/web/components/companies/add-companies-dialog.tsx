@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Search } from "lucide-react";
+import { Database, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc";
 import { errorMessage, nf } from "@/lib/format";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -78,7 +79,9 @@ export function AddCompaniesDialog({
   // are 71% of the rows and almost none has a website, so a run that includes
   // them comes back nearly all `cannot_determine`.
   const [mei, setMei] = useState("nao");
-  const [email, setEmail] = useState("proprio");
+  // "com site" means websiteFromEmail would return a URL — the filter and the
+  // crawler now agree exactly, so this is a real "we have somewhere to visit".
+  const [site, setSite] = useState("com");
   const [porte, setPorte] = useState("");
   const [matrizOnly, setMatrizOnly] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -98,19 +101,24 @@ export function AddCompaniesDialog({
     hasPhone: hasPhone || undefined,
     foundedFrom: /^\d{4}-\d{2}-\d{2}$/.test(foundedFrom) ? foundedFrom : undefined,
     mei: mei === "" ? undefined : mei === "sim",
-    hasEmail: email === "sim" || undefined,
-    ownDomainEmail: email === "proprio" || undefined,
+    ownDomainEmail: site === "com" || undefined,
     porte: porte ? [porte] : undefined,
     matrizOnly: matrizOnly || undefined,
     isMobile: isMobile || undefined,
   };
 
   const results = useQuery({
-    ...trpc.discovery.companies.queryOptions({ filters, order, limit: 100, offset: 0 }),
+    ...trpc.discovery.companies.queryOptions({
+      filters,
+      excludeProjectId: projectId,
+      order,
+      limit: 100,
+      offset: 0,
+    }),
     enabled: open && chosen.length > 0,
   });
   const reach = useQuery({
-    ...trpc.discovery.reach.queryOptions({ filters }),
+    ...trpc.discovery.reach.queryOptions({ filters, excludeProjectId: projectId }),
     enabled: open && chosen.length > 0,
   });
 
@@ -241,21 +249,20 @@ export function AddCompaniesDialog({
               </Field>
 
               <Field
-                label="E-mail"
+                label="Site"
                 hint={
-                  email === "proprio"
-                    ? "domínio próprio é como o site é achado de graça"
-                    : undefined
+                  site === "com"
+                    ? "o site sai do domínio do e-mail — é o que dá o que visitar"
+                    : "sem site não há o que ler, e a empresa fica sem nota"
                 }
                 className="col-span-2"
               >
                 <Choices
-                  value={email}
-                  onChange={setEmail}
+                  value={site}
+                  onChange={setSite}
                   options={[
-                    { value: "", label: "qualquer" },
-                    { value: "sim", label: "com e-mail" },
-                    { value: "proprio", label: "domínio próprio" },
+                    { value: "com", label: "com site" },
+                    { value: "", label: "todas" },
                   ]}
                 />
               </Field>
@@ -298,6 +305,17 @@ export function AddCompaniesDialog({
                 </Button>
               </div>
             </div>
+
+            {site !== "com" && (
+              <Alert className="mx-6 mb-3 w-auto">
+                <TriangleAlert className="size-4" />
+                <AlertDescription>
+                  Sem o filtro de site, a maior parte destas empresas não tem página para ler —
+                  elas entram no projeto e ficam sem nota. Se quiser mesmo assim, use o Places
+                  depois para procurar um site (cota paga).
+                </AlertDescription>
+              </Alert>
+            )}
 
             {results.isLoading ? (
               <div className="space-y-1.5 p-4">

@@ -12,26 +12,50 @@ import {
 import { router, publicProcedure, notFound } from "../trpc";
 import { requireLlm } from "../../lib/llm";
 
-const filters = z.object({
-  cnae: z
-    .array(z.string().regex(/^\d{2,7}$/))
-    .max(40)
-    .optional(),
-  uf: z.array(z.string().length(2)).max(27).optional(),
-  foundedFrom: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
-  foundedTo: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
-  hasPhone: z.boolean().optional(),
-  hasEmail: z.boolean().optional(),
-  mei: z.boolean().optional(),
-  matrizOnly: z.boolean().optional(),
-  q: z.string().max(120).optional(),
-});
+/**
+ * `.strict()` on purpose.
+ *
+ * Zod strips unknown keys by default, so a filter the UI sends but the schema
+ * has not declared is silently dropped and the query runs unfiltered — which is
+ * exactly how `ownDomainEmail`, `isMobile` and `porte` appeared to work while
+ * doing nothing at all. Failing loudly is the point of validating here.
+ */
+const filters = z
+  .object({
+    cnae: z
+      .array(z.string().regex(/^\d{2,7}$/))
+      .max(40)
+      .optional(),
+    uf: z.array(z.string().length(2)).max(27).optional(),
+    foundedFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    foundedTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    hasPhone: z.boolean().optional(),
+    hasEmail: z.boolean().optional(),
+    ownDomainEmail: z.boolean().optional(),
+    isMobile: z.boolean().optional(),
+    mei: z.boolean().optional(),
+    matrizOnly: z.boolean().optional(),
+    porte: z.array(z.string().max(2)).max(5).optional(),
+    naturezaPrefix: z.array(z.string().max(4)).max(8).optional(),
+    minCapitalSocial: z.number().min(0).optional(),
+    q: z.string().max(120).optional(),
+  })
+  .strict();
+
+/**
+ * How many already-added CNPJs we will exclude in SQL.
+ *
+ * A cap because each one is a bound parameter. Beyond it the list would keep
+ * showing companies already in the project — so the caller is told, rather than
+ * the dedup quietly going partial.
+ */
+const MAX_EXCLUDE = 5000;
 
 export const discoveryRouter = router({
   /**
@@ -193,6 +217,8 @@ export const discoveryRouter = router({
     .input(
       z.object({
         filters,
+        /** Leave out what this project already has. */
+        excludeProjectId: z.string().optional(),
         order: z
           .enum(["founded-desc", "founded-asc", "name", "capital-desc"])
           .default("founded-desc"),
@@ -200,18 +226,42 @@ export const discoveryRouter = router({
         offset: z.number().int().min(0).default(0),
       })
     )
-    .query(({ input }) =>
-      listCompanies({
-        filters: input.filters,
+    .query(async ({ ctx, input }) => {
+      const already = input.excludeProjectId
+        ? await ctx.db
+            .select({ cnpj: companies.cnpj })
+            .from(companies)
+            .where(eq(companies.projectId, input.excludeProjectId))
+            .limit(MAX_EXCLUDE)
+        : [];
+      return listCompanies({
+        filters: {
+          ...input.filters,
+          excludeCnpjs: already.length ? already.map((r) => r.cnpj) : undefined,
+        },
         order: input.order,
         limit: input.limit,
         offset: input.offset,
-      })
-    ),
+      });
+    }),
 
   reach: publicProcedure
-    .input(z.object({ filters }))
-    .query(({ input }) => countReach(input.filters)),
+    .input(z.object({ filters, excludeProjectId: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      // Must exclude the same rows the list does, or the header counts
+      // companies the table will not show.
+      const already = input.excludeProjectId
+        ? await ctx.db
+            .select({ cnpj: companies.cnpj })
+            .from(companies)
+            .where(eq(companies.projectId, input.excludeProjectId))
+            .limit(MAX_EXCLUDE)
+        : [];
+      return countReach({
+        ...input.filters,
+        excludeCnpjs: already.length ? already.map((r) => r.cnpj) : undefined,
+      });
+    }),
 
   /**
    * Pulls chosen companies into the project. This is the only moment anything

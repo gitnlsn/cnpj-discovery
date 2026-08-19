@@ -1,4 +1,11 @@
-import { classifyReceitaPhone, buildWaMeLink, FREE_MAIL } from "@cnpj/core/domain";
+import {
+  classifyReceitaPhone,
+  buildWaMeLink,
+  FREE_MAIL,
+  TYPO_MAIL,
+  ACCOUNTANT,
+  ACCOUNTANT_WORD,
+} from "@cnpj/core/domain";
 import { query } from "./duck";
 
 /**
@@ -47,6 +54,13 @@ export interface CompanyFilters {
   /** Legal-nature prefixes, e.g. "2" for private companies, "3" nonprofits. */
   naturezaPrefix?: string[];
   minCapitalSocial?: number;
+  /**
+   * CNPJs to leave out — the ones already in the project.
+   *
+   * Without it the "add" list keeps offering companies that are already there,
+   * and re-adding one is a no-op that looks like a bug.
+   */
+  excludeCnpjs?: string[];
 }
 
 export type CompanyOrder = "founded-desc" | "founded-asc" | "name" | "capital-desc";
@@ -127,12 +141,35 @@ function where(f: CompanyFilters, params: unknown[]): string {
     parts.push(`(lower(e.nome_fantasia) LIKE ? OR lower(emp.razao_social) LIKE ?)`);
   }
 
+  if (f.excludeCnpjs?.length) {
+    parts.push(
+      `e.cnpj NOT IN (${f.excludeCnpjs.map((c) => (params.push(c), "?")).join(", ")})`
+    );
+  }
   if (f.ownDomainEmail) {
+    // Must agree with `websiteFromEmail`, which is what actually decides whether
+    // a URL gets visited. Filtering on free-mail alone was not enough: measured
+    // on CNAE 8599, 43% of the rows it passed were accounting-office domains
+    // (contabilizei.com.br, contabilidademattos.com.br…) that the crawler then
+    // refused, so the filter promised a reachable site and delivered the
+    // accountant's. The patterns come from the same module the crawler uses, so
+    // the two cannot drift apart.
+    const domain = `split_part(lower(e.email), '@', 2)`;
     const domains = [...FREE_MAIL];
     parts.push(
-      `e.email IS NOT NULL AND ` +
-        `split_part(e.email, '@', 2) NOT IN (${domains.map((d) => (params.push(d), "?")).join(", ")})`
+      [
+        `e.email IS NOT NULL`,
+        `${domain} LIKE '%.%'`,
+        `length(${domain}) >= 5`,
+        `${domain} NOT IN (${domains.map((d) => (params.push(d), "?")).join(", ")})`,
+        `NOT regexp_matches(${domain}, ?)`,
+        `${domain} NOT LIKE '%.gov.br'`,
+        `${domain} NOT LIKE '%.cnt.br'`,
+        `NOT regexp_matches(${domain}, ?)`,
+        `NOT regexp_matches(${domain}, ?)`,
+      ].join(" AND ")
     );
+    params.push(TYPO_MAIL.source, ACCOUNTANT.source, ACCOUNTANT_WORD.source);
   }
   if (f.isMobile) {
     // Same rule as normalizeBrazilianLocal: nine digits starting 9, or the

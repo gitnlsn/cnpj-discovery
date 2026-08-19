@@ -247,6 +247,17 @@ export function CompanyTable({
                         nota {maybe(score.bestFit)}
                       </span>
                     </div>
+                  ) : score && !score.model ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help text-xs text-muted-foreground">
+                          sem site
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Não foi pontuada: nenhuma página lida, nenhuma chamada ao modelo gasta.
+                      </TooltipContent>
+                    </Tooltip>
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}

@@ -128,7 +128,54 @@ export async function runPipeline(
         and(eq(companies.projectId, input.projectId), inArray(companies.cnpj, input.cnpjs))
       );
 
-    const candidates: ScoreCandidate[] = fresh.map((r) => {
+    // Only companies whose page was actually read go to the model.
+    //
+    // Measured on this project: of 181 companies with no site, scoring produced
+    // ONE usable score and zero hooks — the rubric requires positive evidence,
+    // so a company with nothing to read can only come back
+    // `cannot_determine` by construction. Each batch of ten still costs one
+    // request against a rate-limited daily cap.
+    //
+    // The rest get a row recorded without a call. `model IS NULL` is what
+    // separates "we never asked" from "we asked and it could not tell".
+    const readable = fresh.filter((r) => (r.crawls?.textExcerpt ?? "").trim().length > 0);
+    const unreadable = fresh.filter((r) => !(r.crawls?.textExcerpt ?? "").trim().length);
+
+    for (const r of unreadable) {
+      const row = {
+        fits: {},
+        bestFit: null,
+        tier: null,
+        confidence: "cannot_determine" as const,
+        recommendation: null,
+        wrongType: false,
+        hook: null,
+        advice: "Sem site para ler. Tente o Places para descobrir um, ou descarte.",
+        evidence: {
+          evidence: [],
+          justification:
+            "Nenhuma página foi lida, então não há evidência para pontuar. " +
+            "Nenhuma chamada ao modelo foi gasta com esta empresa.",
+        },
+        model: null,
+        promptSha: null,
+        error: null,
+        scoredAt: new Date().toISOString(),
+      };
+      await db
+        .insert(scores)
+        .values({ projectId: input.projectId, cnpj: r.companies.cnpj, ...row })
+        .onConflictDoUpdate({ target: [scores.projectId, scores.cnpj], set: row });
+    }
+
+    if (readable.length === 0) {
+      ctx.log(
+        `etapa 2/2 · nenhuma empresa com página lida — ${unreadable.length} registradas sem gastar LLM`
+      );
+      return;
+    }
+
+    const candidates: ScoreCandidate[] = readable.map((r) => {
       const s = r.crawls?.signals as SiteSignals | null;
       return {
         cnpj: r.companies.cnpj,
@@ -160,7 +207,10 @@ export async function runPipeline(
       };
     });
 
-    ctx.log(`etapa 2/2 · pontuando ${candidates.length} empresas`);
+    ctx.log(
+      `etapa 2/2 · pontuando ${candidates.length} com página lida` +
+        (unreadable.length ? ` · ${unreadable.length} sem site, sem gastar LLM` : "")
+    );
 
     const results = await scoreCompanies(requireLlm(), spec, candidates, {
       batchSize: 10,
