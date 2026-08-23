@@ -176,23 +176,70 @@ export interface CompileResult {
   model: string;
 }
 
-export async function compileSpec(llm: LlmPort, input: CompileInput): Promise<CompileResult> {
+/**
+ * The first call's answer, on its own.
+ *
+ * It exists as a value the caller can keep because the second call is the one
+ * that fails: `503 the model is overloaded` is capacity, not quota, and it lands
+ * on the rubric more often because that is the longer generation. Throwing the
+ * targeting answer away when that happens costs a request out of the daily
+ * allowance and makes a retry start from nothing, twice as likely to fail again.
+ *
+ * `targeting` is the model's raw output, deliberately unvalidated: only the two
+ * halves together form a spec, and `parseProjectSpec` is the one place that
+ * decides whether they do.
+ */
+export interface TargetingDraft {
+  targeting: Record<string, unknown>;
+  model: string;
+}
+
+/** Enough of a check to refuse a draft that did not come from this code. */
+export function isTargetingDraft(v: unknown): v is TargetingDraft {
+  if (!v || typeof v !== "object") return false;
+  const d = v as Record<string, unknown>;
+  return (
+    typeof d.model === "string" &&
+    typeof d.targeting === "object" &&
+    d.targeting !== null &&
+    Array.isArray((d.targeting as Record<string, unknown>).cnaePrefixes)
+  );
+}
+
+/** The product and ICP, worded once for both calls. */
+function productBlock(input: CompileInput): string {
   const icpBlock = input.icpText.trim()
     ? `\n\nPERFIL DE CLIENTE IDEAL (trate como requisito, não como sugestão):\n${input.icpText.trim()}`
     : "";
+  return `PRODUTO:\n${input.description.trim()}${icpBlock}`;
+}
 
+/** Call one: what becomes a filter on the Receita base, and what cannot. */
+export async function compileTargeting(
+  llm: LlmPort,
+  input: CompileInput
+): Promise<TargetingDraft> {
   const targeting = await llm.completeJson<Record<string, unknown>>({
     task: "compile",
     schemaName: "targeting",
     schema: TARGETING_SCHEMA as unknown as Record<string, unknown>,
     messages: [
       { role: "system", content: TARGETING_SYSTEM },
-      { role: "user", content: `PRODUTO:\n${input.description.trim()}${icpBlock}` },
+      { role: "user", content: productBlock(input) },
     ],
   });
 
-  const unmapped = Array.isArray(targeting.value.icpCoverage)
-    ? (targeting.value.icpCoverage as { criterion?: string; mapped?: boolean }[])
+  return { targeting: targeting.value, model: targeting.model };
+}
+
+/** Call two: the rubric that scores a company, plus the spec both halves make. */
+export async function compileRubric(
+  llm: LlmPort,
+  input: CompileInput,
+  draft: TargetingDraft
+): Promise<CompileResult> {
+  const unmapped = Array.isArray(draft.targeting.icpCoverage)
+    ? (draft.targeting.icpCoverage as { criterion?: string; mapped?: boolean }[])
         .filter((c) => c.mapped === false)
         .map((c) => c.criterion)
         .filter(Boolean)
@@ -200,7 +247,8 @@ export async function compileSpec(llm: LlmPort, input: CompileInput): Promise<Co
 
   // The rubric call is told what the filters could NOT enforce, so it can put
   // those criteria into the anchors instead. Otherwise an unmappable criterion
-  // vanishes twice: not a filter, and not scored either.
+  // vanishes twice: not a filter, and not scored either. This is also why the
+  // calls are sequential and cannot be merged or run side by side.
   const unmappedBlock = unmapped.length
     ? `\n\nEstes critérios do ICP NÃO viraram filtro (a base não os tem):\n` +
       unmapped.map((c) => `- ${c}`).join("\n") +
@@ -213,10 +261,7 @@ export async function compileSpec(llm: LlmPort, input: CompileInput): Promise<Co
     schema: RUBRIC_SCHEMA as unknown as Record<string, unknown>,
     messages: [
       { role: "system", content: RUBRIC_SYSTEM },
-      {
-        role: "user",
-        content: `PRODUTO:\n${input.description.trim()}${icpBlock}${unmappedBlock}`,
-      },
+      { role: "user", content: `${productBlock(input)}${unmappedBlock}` },
     ],
   });
 
@@ -225,11 +270,25 @@ export async function compileSpec(llm: LlmPort, input: CompileInput): Promise<Co
     summary: rubric.value.summary,
     buyer: rubric.value.buyer,
     problem: rubric.value.problem,
-    targeting: targeting.value,
-    probes: targeting.value.probes,
-    icpCoverage: targeting.value.icpCoverage,
+    targeting: draft.targeting,
+    probes: draft.targeting.probes,
+    icpCoverage: draft.targeting.icpCoverage,
     rubric: rubric.value,
   });
 
   return { spec, model: rubric.model };
+}
+
+/**
+ * Both calls, in order.
+ *
+ * A caller that wants to survive a failure between them runs the two steps
+ * itself and keeps the draft — see `project.compile` in the web app.
+ */
+export async function compileSpec(
+  llm: LlmPort,
+  input: CompileInput,
+  draft?: TargetingDraft
+): Promise<CompileResult> {
+  return compileRubric(llm, input, draft ?? (await compileTargeting(llm, input)));
 }

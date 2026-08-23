@@ -69,8 +69,24 @@ export function CompanyDetailSheet({
   const trpc = useTRPC();
   const qc = useQueryClient();
   const [notes, setNotes] = useState("");
+  const [impression, setImpression] = useState("");
+  /**
+   * The score as it stood just before a re-run, so the sheet can show what moved.
+   *
+   * Session-only, on purpose: `scores` keeps one row per company and a re-run
+   * overwrites it, so there is no persisted "before". Holding it here says that
+   * honestly — it is gone on reload, because it was never saved.
+   */
+  const [previous, setPrevious] = useState<{
+    bestFit: number | null;
+    tier: "hot" | "warm" | "cold" | null;
+  } | null>(null);
 
   useEffect(() => setNotes(row?.lead?.notes ?? ""), [row?.lead?.notes, row?.company.cnpj]);
+  useEffect(() => {
+    setImpression(row?.impression?.body ?? "");
+    setPrevious(null);
+  }, [row?.impression?.body, row?.company.cnpj]);
 
   const setStatus = useMutation({
     ...trpc.leads.setStatus.mutationOptions(),
@@ -88,12 +104,54 @@ export function CompanyDetailSheet({
     ...trpc.leads.flag.mutationOptions(),
     onSuccess: () => void qc.invalidateQueries(),
   });
+  const setImpressionMut = useMutation({
+    ...trpc.impressions.set.mutationOptions(),
+    onSuccess: () => void qc.invalidateQueries(),
+    onError: (e) => toast.error(errorMessage(e) ?? "Falhou."),
+  });
+  const rescore = useMutation({
+    ...trpc.scoring.rescoreOne.mutationOptions(),
+    onSuccess: (r) => {
+      void qc.invalidateQueries();
+      if (r.error) toast.error(`A chamada falhou: ${r.error}`);
+      else toast.success("Pontuada de novo com a sua impressão.");
+    },
+    onError: (e) => toast.error(errorMessage(e) ?? "Falhou."),
+  });
 
   if (!row) return null;
   const { company: c, crawl, score, lead, contacts, places, guessedSite } = row;
   const s = crawl?.signals;
   const evidence = score?.evidence as { evidence?: string[]; justification?: string } | null;
   const fits = (score?.fits ?? null) as Record<string, number | null> | null;
+
+  const stored = row.impression;
+  const dirty = impression.trim() !== (stored?.body ?? "");
+  /**
+   * Whether the grade on screen has seen what you wrote.
+   *
+   * Two timestamps, no new column: once the impression row exists, every
+   * scoring path reads it, so a score stamped after it necessarily included it.
+   */
+  const staleScore = Boolean(stored && score?.scoredAt && score.scoredAt < stored.updatedAt);
+  const busy = setImpressionMut.isPending || rescore.isPending;
+
+  const saveImpression = () =>
+    setImpressionMut.mutate({ projectId, cnpj: c.cnpj, body: impression });
+
+  /** Saved first, then scored: the prompt is built from the row, not from state. */
+  const saveAndRescore = async () => {
+    setPrevious({ bestFit: score?.bestFit ?? null, tier: score?.tier ?? null });
+    try {
+      if (dirty) {
+        await setImpressionMut.mutateAsync({ projectId, cnpj: c.cnpj, body: impression });
+      }
+      await rescore.mutateAsync({ projectId, cnpj: c.cnpj });
+    } catch {
+      // Both mutations already toast; nothing useful to add here.
+      setPrevious(null);
+    }
+  };
 
   return (
     <Sheet open={Boolean(row)} onOpenChange={onOpenChange}>
@@ -291,7 +349,7 @@ export function CompanyDetailSheet({
                 )}
               </TabsContent>
 
-              <TabsContent value="pontuacao">
+              <TabsContent value="pontuacao" className="space-y-4">
                 {!score ? (
                   <p className="py-6 text-sm text-muted-foreground">Ainda não pontuada.</p>
                 ) : !score.model && !score.error ? (
@@ -332,7 +390,19 @@ export function CompanyDetailSheet({
                       {score.recommendation && (
                         <Badge variant="outline">{score.recommendation}</Badge>
                       )}
+                      {staleScore && (
+                        <Badge variant="outline">impressão nova — pontue de novo</Badge>
+                      )}
                     </div>
+
+                    {previous && !rescore.isPending && (
+                      <p className="text-xs text-muted-foreground">
+                        era {maybe(previous.bestFit)}
+                        {previous.tier ? ` · ${previous.tier}` : ""} → agora{" "}
+                        {maybe(score.bestFit)}
+                        {score.tier ? ` · ${score.tier}` : ""}
+                      </p>
+                    )}
 
                     {fits && (
                       <dl className="divide-y rounded-md border px-3">
@@ -400,6 +470,47 @@ export function CompanyDetailSheet({
                     </p>
                   </div>
                 )}
+
+                {/*
+                  Outside the branches above on purpose: an impression is most
+                  useful precisely where there is no score yet, or where the only
+                  score says "sem site". It is also the one thing here that works
+                  before the company has been marked as a lead.
+                */}
+                <Separator />
+                <div className="grid gap-1.5">
+                  <Label htmlFor="impression">Sua impressão</Label>
+                  <Textarea
+                    id="impression"
+                    rows={4}
+                    value={impression}
+                    onChange={(e) => setImpression(e.target.value)}
+                    placeholder="o que você viu olhando essa empresa…"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Entra como evidência na próxima pontuação, e pesa mais que os sinais
+                    automáticos — você olhou, o robô leu uma página. A nota continua vindo da
+                    rubrica: pedir “dá 5” não muda nada.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button size="sm" disabled={busy} onClick={() => void saveAndRescore()}>
+                      {rescore.isPending ? "Pontuando…" : "Salvar e pontuar de novo"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!dirty || busy}
+                      onClick={saveImpression}
+                    >
+                      Só salvar
+                    </Button>
+                  </div>
+                  {stored && !dirty && !staleScore && score?.model && (
+                    <p className="text-xs text-muted-foreground">
+                      Esta nota já considerou sua impressão.
+                    </p>
+                  )}
+                </div>
               </TabsContent>
 
               <TabsContent value="lead" className="space-y-4 pt-3">
@@ -452,6 +563,10 @@ export function CompanyDetailSheet({
                         onChange={(e) => setNotes(e.target.value)}
                         placeholder="o que aconteceu…"
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Um registro do contato, só para você. O modelo nunca lê isso — para isso
+                        existe “sua impressão”, na aba Pontuação.
+                      </p>
                       <div>
                         <Button
                           size="sm"

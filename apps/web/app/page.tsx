@@ -32,9 +32,11 @@ function ProjectPage() {
 
   const compile = useMutation({
     ...trpc.project.compile.mutationOptions(),
-    onSuccess: () => {
+    onSuccess: (r) => {
       void qc.invalidateQueries();
-      toast.success("Perfil compilado.");
+      toast.success(
+        r.resumed ? "Perfil compilado (retomado do alvo salvo)." : "Perfil compilado."
+      );
     },
     onError: (e) => toast.error(errorMessage(e) ?? "Falhou."),
   });
@@ -88,8 +90,14 @@ function ProjectPage() {
             onClick={() => compile.mutate({ id: p.id })}
           >
             <Sparkles className="size-3.5" />
-            {compile.isPending ? "Compilando…" : "Compilar perfil"}
-            <span className="text-xs opacity-70">gasta LLM · 2 chamadas</span>
+            {compile.isPending
+              ? "Compilando…"
+              : p.resumable
+                ? "Terminar de compilar"
+                : "Compilar perfil"}
+            <span className="text-xs opacity-70">
+              gasta LLM · {p.resumable ? "1 chamada (alvo já pronto)" : "2 chamadas"}
+            </span>
           </Button>
         </div>
       </div>

@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { eq, and, inArray, desc, asc, sql } from "drizzle-orm";
-import { companies, crawls, scores, leads, contacts, placesLookups } from "@cnpj/db";
+import {
+  companies,
+  crawls,
+  scores,
+  leads,
+  contacts,
+  placesLookups,
+  impressions,
+} from "@cnpj/db";
 import { websiteFromEmail, type SiteSignals } from "@cnpj/core";
 import { router, publicProcedure } from "../trpc";
 import { runPipeline } from "../pipeline";
@@ -97,6 +105,13 @@ export const companiesRouter = router({
           leads,
           and(eq(leads.cnpj, companies.cnpj), eq(leads.projectId, companies.projectId))
         )
+        .leftJoin(
+          impressions,
+          and(
+            eq(impressions.cnpj, companies.cnpj),
+            eq(impressions.projectId, companies.projectId)
+          )
+        )
         .where(eq(companies.projectId, input.projectId))
         .orderBy(
           input.order === "score"
@@ -151,6 +166,15 @@ export const companiesRouter = router({
           places: r.places_lookups,
           score: r.scores,
           lead: r.leads,
+          /**
+           * What you wrote about this company, if you wrote anything.
+           *
+           * Carried in the list rather than fetched by the sheet so the textarea
+           * opens already filled, and so the sheet can compare `updatedAt`
+           * against `score.scoredAt` to say whether the note on screen was
+           * written before or after the grade.
+           */
+          impression: r.impressions,
           // Site-found numbers first: the registered one is frequently the
           // accountant's line.
           contacts: phones

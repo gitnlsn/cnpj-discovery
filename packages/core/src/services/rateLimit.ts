@@ -17,6 +17,11 @@
 export type RateLimitKind = "daily" | "transient" | "none";
 
 /**
+ * "transient" also covers the 503 an overloaded model answers with. It is not a
+ * limit, but the reaction is the same one: wait and carry on.
+ */
+
+/**
  * Each provider words the daily cap differently, and both share the 429 status
  * with their per-minute limit — so the status alone decides nothing.
  *
@@ -34,6 +39,12 @@ export function classifyRateLimit(error: string | null | undefined): RateLimitKi
   if (/\b429\b|rate.?limit|too many requests|quota|resource_exhausted/i.test(error)) {
     return "transient";
   }
+  // Not a limit at all: `503 The model is overloaded` is the provider saying it
+  // has no capacity for that model this minute. It belongs here because this is
+  // what the loop reads to decide whether waiting helps, and waiting is exactly
+  // what an overload wants — counting it as a hard failure ended runs after a
+  // few unlucky minutes.
+  if (/\b50[23]\b|overloaded|unavailable|try again later/i.test(error)) return "transient";
   return "none";
 }
 
