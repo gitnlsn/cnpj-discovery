@@ -152,6 +152,25 @@ export function SelectionBar({
     onError: fail,
   });
 
+  const search = useMutation({
+    ...trpc.enrichment.searchBatch.mutationOptions(),
+    onSuccess: (r) => {
+      void qc.invalidateQueries();
+      if (!r.jobId) {
+        toast.info(
+          `Nada a buscar: ${r.skipped} fora do filtro (já buscadas, ou com site que dá para ler).`
+        );
+        return;
+      }
+      toast.success(
+        `Buscando presença de ${r.queued} empresas. Se o Google pedir CAPTCHA, ` +
+          `a janela do Chrome abre — resolva lá e o trabalho continua sozinho.`
+      );
+      onClear();
+    },
+    onError: fail,
+  });
+
   const remove = useMutation({
     ...trpc.companies.remove.mutationOptions(),
     onSuccess: (r) => {
@@ -172,6 +191,7 @@ export function SelectionBar({
 
   const busy = Boolean(running);
   const quotaLeft = usage.data?.placesRemaining ?? 0;
+  const searchLeft = usage.data?.searchRemaining ?? 0;
   const pct = progress?.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
@@ -309,6 +329,24 @@ export function SelectionBar({
                       {usage.data?.placesConfigured
                         ? `${quotaLeft}/${usage.data.placesMonthly}`
                         : "sem chave"}
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                    Raspa buscador (de graça, mas devagar)
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    disabled={
+                      !usage.data?.searchConfigured || searchLeft === 0 || search.isPending
+                    }
+                    onClick={() => search.mutate({ projectId, cnpjs: selected })}
+                  >
+                    <Globe className="size-3.5" />
+                    Procurar presença na web
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {usage.data?.searchConfigured
+                        ? `${searchLeft}/${usage.data.searchDaily}`
+                        : "SERP_ENABLED=0"}
                     </span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />

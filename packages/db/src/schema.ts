@@ -31,6 +31,15 @@ export const projects = sqliteTable("projects", {
   spec: text("spec", { mode: "json" }),
   specModel: text("spec_model"),
   specCompiledAt: text("spec_compiled_at"),
+  /**
+   * The first half of a compile that has not finished — see `TargetingDraft`.
+   *
+   * Compiling is two model calls, and the second one is the one that answers
+   * 503. Keeping the first call's output here means a retry pays for one call
+   * instead of two. Cleared the moment a spec is written, so a non-null value
+   * always means "there is a compile to finish".
+   */
+  specDraft: text("spec_draft", { mode: "json" }),
   createdAt: text("created_at").notNull().default(now),
   updatedAt: text("updated_at").notNull().default(now),
 });
@@ -132,6 +141,52 @@ export const placesLookups = sqliteTable("places_lookups", {
   checkedAt: text("checked_at").notNull().default(now),
 });
 
+/**
+ * That we searched the web for a company, and what came back.
+ *
+ * Two tables rather than one, for the same reason `places_lookups` exists: a
+ * company with no rows in `search_hits` is ambiguous — nobody searched, or
+ * somebody searched and found nothing. This table is the record of having
+ * looked, so those stay different facts. A blocked run must leave NO row here,
+ * because a row would assert we looked when we were refused.
+ */
+export const searchLookups = sqliteTable("search_lookups", {
+  cnpj: text("cnpj").primaryKey(),
+  /** Which engine answered — "duckduckgo" or "google". */
+  provider: text("provider"),
+  /** The exact query, so a bad result can be reproduced by hand. */
+  query: text("query"),
+  /** Results the engine returned, before verification. */
+  considered: integer("considered").notNull().default(0),
+  /** Results that survived the name and host gates. */
+  verified: integer("verified").notNull().default(0),
+  checkedAt: text("checked_at").notNull().default(now),
+});
+
+/**
+ * One verified search result.
+ *
+ * `description` is not decoration. For a `social` hit the crawler never fetches
+ * the page — link hubs are short-circuited by design — so this snippet is the
+ * only thing we will ever know about that business, and it is what reaches the
+ * model as evidence.
+ */
+export const searchHits = sqliteTable(
+  "search_hits",
+  {
+    cnpj: text("cnpj").notNull(),
+    url: text("url").notNull(),
+    title: text("title"),
+    description: text("description"),
+    /** classifyHit's answer: "social" | "site". Others are never stored. */
+    kind: text("kind"),
+    /** Which field carried the name, so a run can be audited afterwards. */
+    matchedOn: text("matched_on"),
+    checkedAt: text("checked_at").notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.cnpj, t.url] })]
+);
+
 /** What one crawl of a company's site found. */
 export const crawls = sqliteTable(
   "crawls",
@@ -142,7 +197,7 @@ export const crawls = sqliteTable(
     httpStatus: integer("http_status"),
     error: text("error"),
     /** How the URL was discovered, so a bad guess can be told from a dead site. */
-    urlSource: text("url_source", { enum: ["email", "places", "manual"] }),
+    urlSource: text("url_source", { enum: ["email", "places", "manual", "search"] }),
     signals: text("signals", { mode: "json" }),
     /** Capped at 8 KB by the writer — see crawl.ts. */
     textExcerpt: text("text_excerpt"),
@@ -222,6 +277,33 @@ export const leads = sqliteTable(
 );
 
 /**
+ * What YOU saw when you looked at this company, in your own words.
+ *
+ * Its own table for three reasons. `companies` is otherwise a pure Receita
+ * snapshot and human prose does not belong in it. `scores` is overwritten by the
+ * model on every run, so a rescore there could erase what a person wrote. And
+ * `leads.notes` is a different thing entirely: that is a log of what happened
+ * after you reached out, written once the company is already a lead. This is
+ * written *while* deciding, and unlike `notes` it is read back into the scoring
+ * prompt as evidence.
+ *
+ * Absent row means no impression. An empty one is never stored, because the
+ * difference decides whether the prompt gains its impression rules at all.
+ */
+export const impressions = sqliteTable(
+  "impressions",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    cnpj: text("cnpj").notNull(),
+    body: text("body").notNull(),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.cnpj] })]
+);
+
+/**
  * Background work. One row per run, progress written as it goes.
  *
  * `jobs_one_running_idx` is a partial unique index: two fast clicks cannot start
@@ -232,7 +314,16 @@ export const jobs = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     kind: text("kind", {
-      enum: ["compile", "discover", "crawl", "score", "places", "pipeline", "continuous"],
+      enum: [
+        "compile",
+        "discover",
+        "crawl",
+        "score",
+        "places",
+        "pipeline",
+        "continuous",
+        "search",
+      ],
     }).notNull(),
     projectId: text("project_id"),
     status: text("status", { enum: ["running", "done", "failed", "cancelled"] }).notNull(),

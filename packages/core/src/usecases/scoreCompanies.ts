@@ -27,6 +27,24 @@ const PAGE_EXCERPT_CHARS = 700;
  * "read the whole page and the term never appeared" is real evidence.
  */
 const CONCLUSIVE_TEXT_CHARS = 1500;
+/**
+ * How much of a human impression the model gets.
+ *
+ * Larger than the page excerpt on purpose: a person writes three lines, not a
+ * homepage, and every one of them was typed deliberately.
+ */
+const IMPRESSION_CHARS = 1200;
+/**
+ * How much of the page's own declared description the model gets.
+ *
+ * Its own line rather than part of the page excerpt: a meta description is one
+ * curated sentence, and on a page that rendered nothing it is the only evidence
+ * there is. It must not have to compete with nav text for the excerpt window.
+ */
+const DECLARED_CHARS = 400;
+/** How many verified search hits reach the model, and how much of each. */
+const PRESENCE_HITS = 3;
+const PRESENCE_DESC_CHARS = 300;
 
 export interface ScoreCandidate {
   cnpj: string;
@@ -39,6 +57,27 @@ export interface ScoreCandidate {
   dataInicioAtividade: string | null;
   porte: string | null;
   mei: boolean;
+  /**
+   * What a person wrote after looking at this company themselves.
+   *
+   * Null or empty for almost every company — it exists only where somebody
+   * stopped and typed something, which is exactly why it outweighs the probes.
+   */
+  impression?: string | null;
+  /**
+   * Verified web-search hits, when the company had no readable site.
+   *
+   * Its own field rather than part of `site` because it is not a property of a
+   * page we fetched — for a social hit we never fetch anything, and the search
+   * snippet is all that will ever exist. Empty or absent for a company that was
+   * never searched, which is distinct from one searched with nothing found.
+   */
+  webPresence?: {
+    url: string;
+    title: string;
+    description: string;
+    kind: string;
+  }[];
   /** Null when the site was never crawled — distinct from a crawl that failed. */
   site: {
     finalUrl: string | null;
@@ -52,6 +91,17 @@ export interface ScoreCandidate {
     footerYear: number | null;
     title: string | null;
     textExcerpt: string | null;
+    /**
+     * What the page declares about itself — meta description and JSON-LD.
+     *
+     * Separate from `textExcerpt` because it is not prose the crawler read, and
+     * `textExcerpt.length` is what decides whether a probe miss is conclusive.
+     * On a thin page this is frequently the only sentence saying what the
+     * business does.
+     */
+    structuredText: string | null;
+    /** 200 OK but rendered nothing without JavaScript, so the page is unread. */
+    isJsShell: boolean | null;
     probes: Record<string, boolean>;
   } | null;
 }
@@ -118,6 +168,9 @@ export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
         if (c.site.hasViewport === false) f.push("não responsivo");
         if (c.site.hasWaLink === true) f.push("tem link de WhatsApp");
         if (c.site.hasContactPath === false) f.push("sem caminho de contato");
+        // Said outright, because "a URL with no text" would otherwise read
+        // as an empty business rather than a page we could not read.
+        if (c.site.isJsShell) f.push("página não abre sem JavaScript — não foi lida");
       }
     }
   }
@@ -141,8 +194,42 @@ export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
     }
   }
 
+  // Before the page text: it is shorter, denser, and written on purpose.
+  if (c.site?.structuredText) {
+    lines.push(
+      `  descrição declarada pelo site: ${c.site.structuredText.slice(0, DECLARED_CHARS)}`
+    );
+  }
+
   if (c.site?.textExcerpt) {
     lines.push(`  texto da página: ${c.site.textExcerpt.slice(0, PAGE_EXCERPT_CHARS)}`);
+  }
+
+  // Before the impression, after the page: this is machine-verified evidence,
+  // so it ranks below what a person saw with their own eyes and above nothing.
+  const presence = c.webPresence ?? [];
+  if (presence.length) {
+    const kinds = [...new Set(presence.map((p) => p.kind))].join("/");
+    lines.push(`  presença na web (nome confirmado, ${kinds}):`);
+    for (const hit of presence.slice(0, PRESENCE_HITS)) {
+      const desc = hit.description.trim();
+      lines.push(
+        `    - ${hit.url}${hit.title ? ` — ${hit.title.slice(0, 120)}` : ""}` +
+          // The description is the part that says what the business does; the
+          // URL only says the person exists.
+          (desc
+            ? `\n      descrição: ${desc.slice(0, PRESENCE_DESC_CHARS)}`
+            : "\n      (sem descrição — só confirma a pessoa, não o ramo)")
+      );
+    }
+  }
+
+  // Last, and fenced. The fence is not decoration: this is the one block in the
+  // rendering a person typed by hand, and the model has to be able to tell where
+  // the evidence ends and its own instructions resume.
+  const impression = c.impression?.trim();
+  if (impression) {
+    lines.push(`  impressão de quem olhou: <<<${impression.slice(0, IMPRESSION_CHARS)}>>>`);
   }
 
   return lines.join("\n");
@@ -194,7 +281,11 @@ export async function scoreCompanies(
   if (candidates.length === 0) return [];
 
   // Built once, outside the loop: constant system message, cacheable prompt.
-  const system = buildRubricPrompt(spec);
+  // The impression rules are part of that constant — decided from the whole run,
+  // not per batch, so promptSha means one thing for the run.
+  const withImpressions = candidates.some((c) => Boolean(c.impression?.trim()));
+  const withWebPresence = candidates.some((c) => Boolean(c.webPresence?.length));
+  const system = buildRubricPrompt(spec, { withImpressions, withWebPresence });
   const schema = buildScoreSchema(spec);
   const sha = promptSha(system);
   const axisKeys = spec.rubric.axes.map((a) => a.key);

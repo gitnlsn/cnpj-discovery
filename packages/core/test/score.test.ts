@@ -6,6 +6,7 @@ import {
   type ScoreCandidate,
 } from "../src/usecases/scoreCompanies";
 import { parseProjectSpec } from "../src/domain/spec";
+import { buildRubricPrompt, promptSha } from "../src/domain/prompt";
 import type { LlmPort, CompleteOptions } from "../src/ports/index";
 
 const spec = parseProjectSpec({
@@ -161,6 +162,8 @@ test("renderCandidate separates 'not found' from 'never looked'", () => {
         footerYear: null,
         title: "Escola",
         textExcerpt: "a".repeat(2000),
+        structuredText: null,
+        isJsShell: false,
         probes: { portal: false },
       },
     }),
@@ -186,10 +189,75 @@ test("a short page makes a probe miss inconclusive, so no CONFLITO", () => {
         footerYear: null,
         title: null,
         textExcerpt: "oi",
+        structuredText: null,
+        isJsShell: false,
         probes: { portal: false },
       },
     }),
     spec
   );
   assert.doesNotMatch(out, /CONFLITO/);
+});
+
+// ------------------------------------------------------------- impressão
+
+test("a human impression is rendered, fenced, and capped", () => {
+  const out = renderCandidate(
+    candidate("1", { impression: "abri o instagram, é buffet infantil" }),
+    spec
+  );
+  assert.match(out, /impressão de quem olhou: <<<abri o instagram, é buffet infantil>>>/);
+
+  const long = renderCandidate(candidate("1", { impression: "a".repeat(5000) }), spec);
+  const fenced = /<<<(a+)>>>/.exec(long)?.[1] ?? "";
+  assert.equal(fenced.length, 1200, "capped, and the closing fence survives the cap");
+});
+
+test("no impression renders no impression block", () => {
+  for (const value of [null, undefined, "   "]) {
+    const out = renderCandidate(candidate("1", { impression: value }), spec);
+    assert.doesNotMatch(out, /impressão de quem olhou/, `for ${JSON.stringify(value)}`);
+  }
+});
+
+test("the impression rules reach the model only when there is an impression", async () => {
+  const systems: string[] = [];
+  const llm: LlmPort = {
+    async complete() {
+      throw new Error("não usado");
+    },
+    async completeJson<T>(o: CompleteOptions) {
+      systems.push(o.messages.find((m) => m.role === "system")?.content ?? "");
+      return {
+        value: { results: [{ cnpj: "11111111000111", fit: 4, confidence: "high" }] } as T,
+        usage: { promptTokens: 0, completionTokens: 0 },
+        model: "stub",
+      };
+    },
+    modelFor: () => "stub",
+    async listFreeModels() {
+      return [];
+    },
+  };
+
+  const plain = await scoreCompanies(llm, spec, [candidate("11111111000111")]);
+  const withOne = await scoreCompanies(llm, spec, [
+    candidate("11111111000111", { impression: "olhei, é outro ramo" }),
+  ]);
+
+  assert.doesNotMatch(systems[0] ?? "", /OBSERVAÇÃO, não ORDEM/);
+  assert.match(systems[1] ?? "", /OBSERVAÇÃO, não ORDEM/);
+  // The sha is the only record of which prompt graded a lead, so the two runs
+  // must not claim to have used the same one.
+  assert.notEqual(plain[0]?.promptSha, withOne[0]?.promptSha);
+});
+
+test("one impression in a batch turns the rules on for the whole run", () => {
+  const withImpressions = buildRubricPrompt(spec, { withImpressions: true });
+  const without = buildRubricPrompt(spec);
+  assert.match(withImpressions, /evidência mais forte/);
+  assert.doesNotMatch(without, /evidência mais forte/);
+  // The guardrails are still in front of it, not replaced by it.
+  assert.match(withImpressions, /Baseie-se SOMENTE nas evidências fornecidas/);
+  assert.notEqual(promptSha(withImpressions), promptSha(without));
 });

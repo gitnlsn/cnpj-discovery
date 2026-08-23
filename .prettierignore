@@ -5,3 +5,8 @@ pnpm-lock.yaml
 gmaps-whatsapp-extractor/
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
+
+# Saved search-results pages, kept byte-for-byte as the engines served them.
+# Reformatting them would change the markup the parsers are tested against,
+# which is the one thing these files exist to preserve.
+packages/core/test/fixtures/

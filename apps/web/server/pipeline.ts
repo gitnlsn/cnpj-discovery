@@ -6,6 +6,7 @@ import {
   placesLookups,
   projects,
   contacts,
+  impressions,
   type Db,
 } from "@cnpj/db";
 import { startJob } from "@cnpj/jobs";
@@ -19,9 +20,9 @@ import {
   mapLimit,
   HostThrottle,
   type ScoreCandidate,
-  type SiteSignals,
 } from "@cnpj/core";
 import { requireLlm } from "../lib/llm";
+import { siteFromCrawl, toScoreCandidate, crawlIsReadable, loadPresence } from "./candidate";
 
 /**
  * Visit sites, then score — as one job.
@@ -124,6 +125,13 @@ export async function runPipeline(
       .select()
       .from(companies)
       .leftJoin(crawls, eq(crawls.cnpj, companies.cnpj))
+      .leftJoin(
+        impressions,
+        and(
+          eq(impressions.cnpj, companies.cnpj),
+          eq(impressions.projectId, companies.projectId)
+        )
+      )
       .where(
         and(eq(companies.projectId, input.projectId), inArray(companies.cnpj, input.cnpjs))
       );
@@ -138,8 +146,8 @@ export async function runPipeline(
     //
     // The rest get a row recorded without a call. `model IS NULL` is what
     // separates "we never asked" from "we asked and it could not tell".
-    const readable = fresh.filter((r) => (r.crawls?.textExcerpt ?? "").trim().length > 0);
-    const unreadable = fresh.filter((r) => !(r.crawls?.textExcerpt ?? "").trim().length);
+    const readable = fresh.filter((r) => crawlIsReadable(r.crawls));
+    const unreadable = fresh.filter((r) => !crawlIsReadable(r.crawls));
 
     for (const r of unreadable) {
       const row = {
@@ -175,37 +183,18 @@ export async function runPipeline(
       return;
     }
 
-    const candidates: ScoreCandidate[] = readable.map((r) => {
-      const s = r.crawls?.signals as SiteSignals | null;
-      return {
-        cnpj: r.companies.cnpj,
-        razaoSocial: r.companies.razaoSocial,
-        nomeFantasia: r.companies.nomeFantasia,
-        cnae: r.companies.cnae,
-        cnaeDescricao: r.companies.cnaeDescricao,
-        uf: r.companies.uf,
-        municipio: r.companies.municipio,
-        dataInicioAtividade: r.companies.dataInicioAtividade,
-        porte: r.companies.porte,
-        mei: r.companies.mei,
-        site: r.crawls
-          ? {
-              finalUrl: r.crawls.finalUrl,
-              isDead: s?.isDead ?? false,
-              isLinkHub: s?.isLinkHub ?? false,
-              isFreeBuilder: s?.isFreeBuilder ?? false,
-              hasViewport: s?.hasViewport ?? null,
-              hasWaLink: s?.hasWaLink ?? null,
-              hasContactPath: s?.hasContactPath ?? null,
-              platform: s?.platform ?? null,
-              footerYear: s?.footerYear ?? null,
-              title: s?.title ?? null,
-              textExcerpt: r.crawls.textExcerpt,
-              probes: s?.probes ?? {},
-            }
-          : null,
-      };
-    });
+    const presence = await loadPresence(
+      db,
+      readable.map((r) => r.companies.cnpj)
+    );
+    const candidates: ScoreCandidate[] = readable.map((r) =>
+      toScoreCandidate(
+        r.companies,
+        siteFromCrawl(r.crawls),
+        r.impressions?.body ?? null,
+        presence.get(r.companies.cnpj)
+      )
+    );
 
     ctx.log(
       `etapa 2/2 · pontuando ${candidates.length} com página lida` +

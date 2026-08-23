@@ -1,15 +1,44 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
-import { companies, crawls, scores, projects } from "@cnpj/db";
-import {
-  scoreCompanies,
-  parseProjectSpec,
-  type ScoreCandidate,
-  type SiteSignals,
-} from "@cnpj/core";
+import { companies, crawls, scores, projects, impressions, type Db } from "@cnpj/db";
+import { scoreCompanies, parseProjectSpec, type ScoreCandidate } from "@cnpj/core";
 import { startJob } from "@cnpj/jobs";
 import { router, publicProcedure, notFound, badRequest } from "../trpc";
 import { requireLlm } from "../../lib/llm";
+import { dailyLimit, recordLlm, remainingToday } from "../../lib/llm-budget";
+import { siteFromCrawl, toScoreCandidate, loadPresence } from "../candidate";
+
+type ScoreRow = Awaited<ReturnType<typeof scoreCompanies>>[number];
+
+/**
+ * The one place a score row is written from a model result.
+ *
+ * Every column is restated in `set` because SQLite has no "update all", and a
+ * column left out of that list would keep a value from the previous run while
+ * the rest of the row moved on — the most confusing possible state for a table
+ * whose whole job is to be trustworthy.
+ */
+async function persistScore(db: Db, projectId: string, r: ScoreRow): Promise<void> {
+  const row = {
+    fits: r.fits,
+    bestFit: r.bestFit,
+    tier: r.tier,
+    confidence: r.confidence,
+    recommendation: r.recommendation,
+    wrongType: r.wrongType,
+    hook: r.hook,
+    advice: r.advice,
+    evidence: r.evidence,
+    model: r.model,
+    promptSha: r.promptSha,
+    error: r.error,
+    scoredAt: new Date().toISOString(),
+  };
+  await db
+    .insert(scores)
+    .values({ projectId, cnpj: r.cnpj, ...row })
+    .onConflictDoUpdate({ target: [scores.projectId, scores.cnpj], set: row });
+}
 
 export const scoringRouter = router({
   /**
@@ -52,6 +81,10 @@ export const scoringRouter = router({
           scores,
           and(eq(scores.cnpj, companies.cnpj), eq(scores.projectId, input.projectId))
         )
+        .leftJoin(
+          impressions,
+          and(eq(impressions.cnpj, companies.cnpj), eq(impressions.projectId, input.projectId))
+        )
         .where(eq(companies.projectId, input.projectId))
         .limit(input.limit * 3);
 
@@ -66,39 +99,20 @@ export const scoringRouter = router({
 
       if (pending.length === 0) return { scored: 0, failed: 0 };
 
-      const candidates: ScoreCandidate[] = pending.map((r) => {
-        const s = r.crawls?.signals as SiteSignals | null;
-        return {
-          cnpj: r.companies.cnpj,
-          razaoSocial: r.companies.razaoSocial,
-          nomeFantasia: r.companies.nomeFantasia,
-          cnae: r.companies.cnae,
-          cnaeDescricao: r.companies.cnaeDescricao,
-          uf: r.companies.uf,
-          municipio: r.companies.municipio,
-          dataInicioAtividade: r.companies.dataInicioAtividade,
-          porte: r.companies.porte,
-          mei: r.companies.mei,
-          // null means never crawled, which the prompt renders differently from
-          // a crawl that found nothing.
-          site: r.crawls
-            ? {
-                finalUrl: r.crawls.finalUrl,
-                isDead: s?.isDead ?? false,
-                isLinkHub: s?.isLinkHub ?? false,
-                isFreeBuilder: s?.isFreeBuilder ?? false,
-                hasViewport: s?.hasViewport ?? null,
-                hasWaLink: s?.hasWaLink ?? null,
-                hasContactPath: s?.hasContactPath ?? null,
-                platform: s?.platform ?? null,
-                footerYear: s?.footerYear ?? null,
-                title: s?.title ?? null,
-                textExcerpt: r.crawls.textExcerpt,
-                probes: s?.probes ?? {},
-              }
-            : null,
-        };
-      });
+      // A null site block means never crawled, which the prompt renders
+      // differently from a crawl that found nothing.
+      const presence = await loadPresence(
+        ctx.db,
+        pending.map((r) => r.companies.cnpj)
+      );
+      const candidates: ScoreCandidate[] = pending.map((r) =>
+        toScoreCandidate(
+          r.companies,
+          siteFromCrawl(r.crawls),
+          r.impressions?.body ?? null,
+          presence.get(r.companies.cnpj)
+        )
+      );
 
       // Started, not awaited. Free models are throttled to one request every
       // 3.2s, so 200 companies at batch 10 is over a minute of wall clock —
@@ -110,51 +124,89 @@ export const scoringRouter = router({
           onProgress: (done, total) => jobCtx.progress({ done, total }),
         });
 
-        for (const r of results) {
-          await ctx.db
-            .insert(scores)
-            .values({
-              projectId: input.projectId,
-              cnpj: r.cnpj,
-              fits: r.fits,
-              bestFit: r.bestFit,
-              tier: r.tier,
-              confidence: r.confidence,
-              recommendation: r.recommendation,
-              wrongType: r.wrongType,
-              hook: r.hook,
-              advice: r.advice,
-              evidence: r.evidence,
-              model: r.model,
-              promptSha: r.promptSha,
-              error: r.error,
-              scoredAt: new Date().toISOString(),
-            })
-            .onConflictDoUpdate({
-              target: [scores.projectId, scores.cnpj],
-              set: {
-                fits: r.fits,
-                bestFit: r.bestFit,
-                tier: r.tier,
-                confidence: r.confidence,
-                recommendation: r.recommendation,
-                wrongType: r.wrongType,
-                hook: r.hook,
-                advice: r.advice,
-                evidence: r.evidence,
-                model: r.model,
-                promptSha: r.promptSha,
-                error: r.error,
-                scoredAt: new Date().toISOString(),
-              },
-            });
-        }
+        for (const r of results) await persistScore(ctx.db, input.projectId, r);
 
         const failed = results.filter((r) => r.error).length;
         jobCtx.log(`pronto: ${results.length - failed} pontuadas, ${failed} falharam`);
       });
 
       return { jobId: job.id, queued: candidates.length };
+    }),
+
+  /**
+   * Re-scores exactly one company, right now, and returns the new row.
+   *
+   * Deliberately NOT a job, unlike every other scoring path. Two reasons:
+   *
+   * - It is one company at batch 1, so one model call — seconds, well inside
+   *   what an HTTP request can hold open. The job machinery exists for work
+   *   measured in minutes.
+   * - `jobs_one_running_idx` allows one job at a time, so going through
+   *   `startJob` would fail with "já existe um trabalho rodando" whenever the
+   *   continuous loop is on. That is precisely when you are sitting in the sheet
+   *   reading leads and want to try your impression against the rubric.
+   *
+   * The candidate carries whatever impression is stored, so this is the path
+   * that answers "does what I saw change the score?".
+   */
+  rescoreOne: publicProcedure
+    .input(z.object({ projectId: z.string(), cnpj: z.string().regex(/^\d{14}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const [project] = await ctx.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, input.projectId));
+      if (!project) notFound(`projeto ${input.projectId} não existe`);
+      if (!project.spec) {
+        badRequest("Compile o perfil de cliente ideal antes de pontuar.");
+      }
+      const spec = parseProjectSpec(project.spec);
+
+      const [row] = await ctx.db
+        .select()
+        .from(companies)
+        .leftJoin(crawls, eq(crawls.cnpj, companies.cnpj))
+        .leftJoin(
+          impressions,
+          and(eq(impressions.cnpj, companies.cnpj), eq(impressions.projectId, input.projectId))
+        )
+        .where(and(eq(companies.projectId, input.projectId), eq(companies.cnpj, input.cnpj)));
+      if (!row) notFound(`${input.cnpj} não está neste projeto`);
+
+      // Checked before the call, like the continuous loop does. A single button
+      // press is not worth an exception to the local brake.
+      if ((await remainingToday(ctx.db)) <= 0) {
+        badRequest(
+          `O teto de ${dailyLimit()} requisições ao modelo por dia acabou. ` +
+            "Tente de novo amanhã, ou ajuste LLM_DAILY_REQUESTS."
+        );
+      }
+
+      const candidate = toScoreCandidate(
+        row.companies,
+        siteFromCrawl(row.crawls),
+        row.impressions?.body ?? null,
+        (await loadPresence(ctx.db, [input.cnpj])).get(input.cnpj)
+      );
+
+      const [result] = await scoreCompanies(requireLlm(), spec, [candidate], {
+        batchSize: 1,
+      });
+      // After the call, never before — a request that threw was still a request
+      // as far as the provider is concerned.
+      await recordLlm(ctx.db, 1);
+      if (!result) badRequest("o modelo não devolveu resultado");
+
+      // A failed call is persisted with `error` set and every fit null, exactly
+      // as the batch path does. The sheet already renders that honestly, and an
+      // invented number would outrank real ones forever.
+      await persistScore(ctx.db, input.projectId, result);
+
+      const [fresh] = await ctx.db
+        .select()
+        .from(scores)
+        .where(and(eq(scores.projectId, input.projectId), eq(scores.cnpj, input.cnpj)));
+      return { score: fresh ?? null, error: result.error };
     }),
 
   /** The ranked list, plus the discarded pile kept visible with its reason. */

@@ -1,7 +1,14 @@
 import { extractText, runProbes } from "../domain/probes";
+import {
+  extractJsonLd,
+  extractMetaDescription,
+  structuredText,
+  type JsonLdFacts,
+} from "../domain/structured";
 import type { Probe } from "../domain/spec";
 import type { HttpPort } from "../ports/index";
 import { FREE_MAIL, TYPO_MAIL, ACCOUNTANT, ACCOUNTANT_WORD } from "../domain/mail";
+import { hostOf, isHub, isBuilder } from "../domain/hosts";
 
 /**
  * Fetches a company site and turns it into signals.
@@ -16,42 +23,6 @@ import { FREE_MAIL, TYPO_MAIL, ACCOUNTANT, ACCOUNTANT_WORD } from "../domain/mai
  * defensible omissions when the crawl was one homepage per company; a deep
  * crawl that follows links makes them obligatory.
  */
-
-/** Hosts that mean "they have no real website, just a link in bio". */
-const LINK_HUBS = [
-  "linktr.ee",
-  "linktree.com",
-  "beacons.ai",
-  "bio.link",
-  "linkbio.co",
-  "lnk.bio",
-  "campsite.bio",
-  "linkme.bio",
-  "instagram.com",
-  "facebook.com",
-  "fb.com",
-  "m.facebook.com",
-  "wa.me",
-  "api.whatsapp.com",
-  "chat.whatsapp.com",
-  "youtube.com",
-  "tiktok.com",
-];
-
-/** Free-subdomain builders — a strong "cheap or abandoned site" signal. */
-const FREE_BUILDERS = [
-  ".wixsite.com",
-  ".negocio.site", // Google's free BR site builder
-  ".business.site", // deprecated 2024 → these are usually dead
-  ".wordpress.com",
-  ".blogspot.com",
-  ".webnode.page",
-  ".webnode.com.br",
-  ".weebly.com",
-  ".jimdosite.com",
-  ".godaddysites.com",
-  ".mystrikingly.com",
-];
 
 /**
  * Receita Federal publishes no website column, so a lead with no site recorded
@@ -80,14 +51,6 @@ export function websiteFromEmail(email: string | null): string | null {
   }
 
   return `https://${domain}`;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return "";
-  }
 }
 
 function detectPlatform(html: string, generator: string | null): string | null {
@@ -137,6 +100,26 @@ export interface SiteSignals {
   /** A number found in a wa.me / tel: href — often better than the RF one. */
   sitePhone: string | null;
   textExcerpt: string | null;
+  /**
+   * What the page declares about itself — meta description and JSON-LD.
+   *
+   * Kept apart from `textExcerpt` on purpose. Downstream reads that field's
+   * length as "how much prose did we read", and declared metadata is not prose.
+   * See domain/structured.ts.
+   */
+  metaDescription: string | null;
+  jsonLd: JsonLdFacts | null;
+  /** meta + JSON-LD as one haystack, which probes also search. */
+  structuredText: string | null;
+  /**
+   * A page that returned 200 and rendered nothing without JavaScript.
+   *
+   * `null` means we never fetched it, same as the signals above. The point of
+   * the flag is that an empty shell is "we could not read it", not "there is
+   * nothing there" — without it, a nav bar's worth of text produces a full set
+   * of `false` probe results that read downstream as observed absence.
+   */
+  isJsShell: boolean | null;
   pagesFetched: number;
   probes: Record<string, boolean>;
 }
@@ -163,13 +146,34 @@ function emptySignals(url: string | null): SiteSignals {
     igHandle: null,
     sitePhone: null,
     textExcerpt: null,
+    metaDescription: null,
+    jsonLd: null,
+    structuredText: null,
+    isJsShell: null,
     pagesFetched: 0,
     probes: {},
   };
 }
 
-const isHub = (host: string) => LINK_HUBS.some((h) => host === h || host.endsWith(`.${h}`));
-const isBuilder = (host: string) => FREE_BUILDERS.some((s) => host.endsWith(s));
+/**
+ * Below this much rendered text, a page with a JS mount point is a shell.
+ *
+ * Deliberately well under `CONCLUSIVE_TEXT_CHARS` (1500, in scoreCompanies):
+ * that threshold answers "is a probe miss meaningful", this one answers the
+ * narrower "did this page render at all". A real homepage clears both easily;
+ * the pages this catches render a header and a spinner.
+ */
+const SHELL_TEXT_CHARS = 400;
+
+/**
+ * Markers for a client-rendered app that served us an empty container.
+ *
+ * The mount point is the evidence, not the framework: `detectPlatform` already
+ * reports nextjs/vue, but plenty of shells are plain React or Angular with no
+ * generator tag at all.
+ */
+const MOUNT_POINTS =
+  /(__NEXT_DATA__|id=["'](?:__next|root|app|__nuxt|q-app)["']|data-reactroot|ng-version=)/i;
 
 /** Analyzes already-fetched HTML. Pure, so it is testable without a network. */
 export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals> {
@@ -189,6 +193,10 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
   const igMatch = html.match(/(?:instagram\.com\/)([A-Za-z0-9_.]{2,30})(?:[/?"'\s]|$)/i);
   const generator = generatorMatch?.[1]?.trim() ?? null;
 
+  const text = extractText(html);
+  const metaDescription = extractMetaDescription(html);
+  const jsonLd = extractJsonLd(html);
+
   return {
     hasViewport: /<meta[^>]+name=["']viewport["']/i.test(head),
     hasWaLink: /(?:wa\.me\/|api\.whatsapp\.com\/send|whatsapp:\/\/send)/i.test(html),
@@ -206,7 +214,11 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
       igMatch?.[1] && !["p", "reel", "explore"].includes(igMatch[1]) ? igMatch[1] : null,
     sitePhone: phoneFromHtml(html),
     isHttps: finalUrl.startsWith("https://"),
-    textExcerpt: extractText(html),
+    textExcerpt: text,
+    metaDescription,
+    jsonLd,
+    structuredText: structuredText(jsonLd, metaDescription),
+    isJsShell: text.length < SHELL_TEXT_CHARS && MOUNT_POINTS.test(html),
   };
 }
 
@@ -510,7 +522,20 @@ export async function crawlSite(
         signals.textExcerpt = text.slice(0, 8000);
       }
 
-      signals.probes = runProbes(opts.probes ?? [], signals.textExcerpt);
+      // Probes search the rendered text AND what the page declares about
+      // itself, because probe vocabulary genuinely lives in a meta description
+      // — often the only place it lives, on a thin page.
+      //
+      // A shell with nothing declared is the case that must NOT be probed: its
+      // few characters of nav text would produce a full set of `false`s, and
+      // `runProbes` returning {} for null input is exactly how "we did not
+      // look" stays distinct from "it is not there".
+      const declared = signals.structuredText;
+      const haystack =
+        signals.isJsShell && !declared
+          ? null
+          : [signals.textExcerpt, declared].filter(Boolean).join(" ") || null;
+      signals.probes = runProbes(opts.probes ?? [], haystack);
     } else {
       signals.isHttps = signals.finalUrl.startsWith("https://");
     }

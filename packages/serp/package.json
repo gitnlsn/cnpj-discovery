@@ -1,0 +1,17 @@
+{
+  "name": "@cnpj/serp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Busca no Google via navegador real, com o CAPTCHA resolvido por uma pessoa.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cnpj/core": "workspace:*",
+    "puppeteer-core": "^24.9.0"
+  }
+}

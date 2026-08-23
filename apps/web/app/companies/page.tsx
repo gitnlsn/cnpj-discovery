@@ -6,7 +6,6 @@ import { FolderKanban } from "lucide-react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc";
 import { useProject } from "@/lib/use-project";
-import type { CompanyRow } from "@/lib/api-types";
 import { errorMessage, nf } from "@/lib/format";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -42,7 +41,15 @@ function CompaniesPage() {
   const [projectId] = useProject();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [detail, setDetail] = useState<CompanyRow | null>(null);
+  /**
+   * The open sheet is addressed by CNPJ, not by the row object.
+   *
+   * Holding the row itself froze it at the moment of the click: a mutation could
+   * invalidate the list, the table behind would update, and the sheet would go
+   * on showing the score from before. That is fatal for the sheet's own
+   * re-score button, whose whole purpose is to show you what changed.
+   */
+  const [detailCnpj, setDetailCnpj] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
   const list = useQuery({
@@ -106,6 +113,27 @@ function CompaniesPage() {
     onError: fail,
   });
 
+  const meiPending = useQuery({
+    ...trpc.enrichment.meiPending.queryOptions({ projectId: projectId ?? "" }),
+    enabled: Boolean(projectId),
+  });
+
+  const reprocessMei = useMutation({
+    ...trpc.enrichment.reprocessMei.mutationOptions(),
+    onSuccess: (r) => {
+      void qc.invalidateQueries();
+      if (!r.jobId) {
+        toast.info("Nada a reprocessar: todas já foram buscadas uma vez.");
+        return;
+      }
+      toast.success(
+        `Procurando presença de ${r.queued} — depois pontuo as que ganharem evidência. ` +
+          `Se o Google pedir CAPTCHA, a janela do Chrome abre para você resolver.`
+      );
+    },
+    onError: fail,
+  });
+
   if (!projectId) {
     return (
       <Card>
@@ -120,6 +148,8 @@ function CompaniesPage() {
 
   const rows = list.data?.rows ?? [];
   const pid = projectId;
+  // Re-resolved on every render, so the sheet always shows the current row.
+  const detail = rows.find((r) => r.company.cnpj === detailCnpj) ?? null;
 
   // The CSV is the list, not a separate report: it carries whatever the toolbar
   // is filtering by, so the file matches what is on screen.
@@ -185,6 +215,51 @@ function CompaniesPage() {
         </Alert>
       )}
 
+      {/*
+        The MEI dead-end cohort.
+        
+        Shown as a banner rather than tucked into a menu because the action
+        spends a scarce, self-imposed daily quota and can pause on a CAPTCHA.
+        The count is the point: nobody should trigger a scraping run without
+        first seeing how many companies it will touch. When the number is zero
+        the banner disappears entirely.
+      */}
+      {meiPending.data && meiPending.data.searchable > 0 && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              <b className="tabular">{nf(meiPending.data.total)}</b> MEI
+              {meiPending.data.total === 1 ? "" : "s"} sem conclusão — a Receita não tem site
+              delas, então a nota não saiu. Dá para procurar o nome do dono na web e pontuar de
+              novo{" "}
+              {meiPending.data.searchable < meiPending.data.total && (
+                <span className="text-muted-foreground">
+                  ({nf(meiPending.data.searchable)} com nome verificável)
+                </span>
+              )}
+              .
+            </span>
+            {meiPending.data.enabled ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7"
+                disabled={reprocessMei.isPending || meiPending.data.remaining === 0}
+                onClick={() => reprocessMei.mutate({ projectId: pid })}
+              >
+                {meiPending.data.remaining === 0
+                  ? "sem busca hoje"
+                  : `Procurar e pontuar (${nf(Math.min(meiPending.data.searchable, meiPending.data.remaining))})`}
+              </Button>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                ligue com SERP_ENABLED=1 para procurar na web
+              </span>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <CompanyTable
         rows={rows}
         loading={list.isLoading}
@@ -200,7 +275,7 @@ function CompaniesPage() {
         onToggleAll={(checked) =>
           setSelected(checked ? new Set(rows.map((r) => r.company.cnpj)) : new Set())
         }
-        onOpen={setDetail}
+        onOpen={(r) => setDetailCnpj(r.company.cnpj)}
         emptyAction={
           summary.data?.total === 0 ? (
             <Button size="sm" onClick={() => setAdding(true)}>
@@ -234,7 +309,7 @@ function CompaniesPage() {
       <CompanyDetailSheet
         projectId={pid}
         row={detail}
-        onOpenChange={(open) => !open && setDetail(null)}
+        onOpenChange={(open) => !open && setDetailCnpj(null)}
       />
 
       <AddCompaniesDialog projectId={pid} open={adding} onOpenChange={setAdding} />

@@ -17,10 +17,17 @@ if (existsSync(rootEnv)) {
 
 const config: NextConfig = {
   // The workspace packages ship TypeScript source with no build step.
-  transpilePackages: ["@cnpj/core", "@cnpj/data", "@cnpj/db", "@cnpj/jobs"],
+  transpilePackages: ["@cnpj/core", "@cnpj/data", "@cnpj/db", "@cnpj/jobs", "@cnpj/serp"],
   // Native addons: they must stay external or the bundler will try to inline a
   // .node binary.
-  serverExternalPackages: ["better-sqlite3", "@duckdb/node-api", "@duckdb/node-bindings"],
+  // puppeteer-core spawns a browser and resolves its own paths at runtime;
+  // bundling it breaks both.
+  serverExternalPackages: [
+    "better-sqlite3",
+    "@duckdb/node-api",
+    "@duckdb/node-bindings",
+    "puppeteer-core",
+  ],
 };
 
 export default config;

@@ -13,7 +13,7 @@ import { jobs, type Db } from "@cnpj/db";
  */
 
 export type JobKind =
-  "compile" | "discover" | "crawl" | "score" | "places" | "pipeline" | "continuous";
+  "compile" | "discover" | "crawl" | "score" | "places" | "pipeline" | "continuous" | "search";
 
 export interface JobProgress {
   done: number;

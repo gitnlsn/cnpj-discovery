@@ -14,6 +14,7 @@
     "@cnpj/data": "workspace:*",
     "@cnpj/db": "workspace:*",
     "@cnpj/jobs": "workspace:*",
+    "@cnpj/serp": "workspace:*",
     "@tailwindcss/postcss": "^4.3.3",
     "@tanstack/react-query": "^5.90.5",
     "@trpc/client": "^11.18.0",

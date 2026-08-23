@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS projects (
   spec              TEXT,
   spec_model        TEXT,
   spec_compiled_at  TEXT,
+  spec_draft        TEXT,
   created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -82,13 +83,33 @@ CREATE TABLE IF NOT EXISTS places_lookups (
   checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS search_lookups (
+  cnpj       TEXT PRIMARY KEY,
+  provider   TEXT,
+  query      TEXT,
+  considered INTEGER NOT NULL DEFAULT 0,
+  verified   INTEGER NOT NULL DEFAULT 0,
+  checked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS search_hits (
+  cnpj        TEXT NOT NULL,
+  url         TEXT NOT NULL,
+  title       TEXT,
+  description TEXT,
+  kind        TEXT,
+  matched_on  TEXT,
+  checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (cnpj, url)
+);
+
 CREATE TABLE IF NOT EXISTS crawls (
   cnpj          TEXT PRIMARY KEY,
   website_url   TEXT,
   final_url     TEXT,
   http_status   INTEGER,
   error         TEXT,
-  url_source    TEXT CHECK (url_source IN ('email','places','manual')),
+  url_source    TEXT CHECK (url_source IN ('email','places','manual','search')),
   signals       TEXT,
   text_excerpt  TEXT,
   pages_fetched INTEGER NOT NULL DEFAULT 0,
@@ -136,9 +157,23 @@ CREATE TABLE IF NOT EXISTS leads (
 );
 CREATE INDEX IF NOT EXISTS leads_status_idx ON leads (project_id, status);
 
+-- What you saw when you looked at a company, in your own words.
+--
+-- Not a column on "companies" (that table is a pure Receita snapshot), not on
+-- "scores" (the model overwrites that row on every run and would erase it), and
+-- not "leads.notes" (that is a log of what happened after you reached out).
+-- Unlike notes, this is read back into the scoring prompt as evidence.
+CREATE TABLE IF NOT EXISTS impressions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  cnpj       TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (project_id, cnpj)
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline','continuous')),
+  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline','continuous','search')),
   project_id  TEXT,
   status      TEXT NOT NULL CHECK (status IN ('running','done','failed','cancelled')),
   progress    TEXT,
@@ -171,15 +206,84 @@ function upgradeJobsKind(sqlite: Database.Database): void {
   const row = sqlite
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'")
     .get() as { sql?: string } | undefined;
-  if (!row?.sql || row.sql.includes("'continuous'")) return;
+  // The sentinel must name the NEWEST kind. Checking for an older one is a
+  // silent no-op on every database that already has it, and the CHECK then
+  // rejects inserts of the new kind at runtime rather than at migration time.
+  if (!row?.sql || row.sql.includes("'search'")) return;
   sqlite.exec("DROP TABLE jobs;");
+}
+
+/**
+ * `crawls.url_source` gained 'search', and SQLite cannot alter a CHECK.
+ *
+ * Unlike `jobs`, these rows are worth keeping — a crawl is minutes of network
+ * time and the text a score was built from. So this is a real rebuild: create
+ * the table under a temporary name, copy every row across, swap. Same shape as
+ * the DDL above, deliberately duplicated here because the DDL's
+ * `IF NOT EXISTS` is what makes it a no-op on the database being fixed.
+ */
+function upgradeCrawlUrlSource(sqlite: Database.Database): void {
+  const row = sqlite
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='crawls'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'search'")) return;
+
+  sqlite.exec(`
+    BEGIN;
+    CREATE TABLE crawls_new (
+      cnpj          TEXT PRIMARY KEY,
+      website_url   TEXT,
+      final_url     TEXT,
+      http_status   INTEGER,
+      error         TEXT,
+      url_source    TEXT CHECK (url_source IN ('email','places','manual','search')),
+      signals       TEXT,
+      text_excerpt  TEXT,
+      pages_fetched INTEGER NOT NULL DEFAULT 0,
+      checked_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    INSERT INTO crawls_new
+      SELECT cnpj, website_url, final_url, http_status, error, url_source,
+             signals, text_excerpt, pages_fetched, checked_at
+      FROM crawls;
+    DROP TABLE crawls;
+    ALTER TABLE crawls_new RENAME TO crawls;
+    CREATE INDEX IF NOT EXISTS crawls_checked_idx ON crawls (checked_at);
+    COMMIT;
+  `);
+}
+
+/**
+ * Columns added to a table that already exists.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing database, so a new
+ * column in the DDL above reaches a fresh install and nobody else. Listed here
+ * as well, it reaches the database that is already on disk. `ADD COLUMN` is one
+ * of the few alterations SQLite does in place, and it needs no default because
+ * every column here is nullable.
+ */
+const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: "projects", column: "spec_draft", type: "TEXT" },
+];
+
+function addMissingColumns(sqlite: Database.Database): void {
+  for (const { table, column, type } of ADDED_COLUMNS) {
+    const cols = sqlite.prepare(`SELECT name FROM pragma_table_info(?)`).all(table) as {
+      name: string;
+    }[];
+    if (!cols.length) continue; // table not created yet — the DDL just made it with the column
+    if (cols.some((c) => c.name === column)) continue;
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
+  }
 }
 
 export function migrate(path = dbPath()): void {
   const sqlite = new Database(path);
   sqlite.pragma("journal_mode = WAL");
   upgradeJobsKind(sqlite);
+  upgradeCrawlUrlSource(sqlite);
   sqlite.exec(DDL);
+  addMissingColumns(sqlite);
   sqlite.close();
 }
 

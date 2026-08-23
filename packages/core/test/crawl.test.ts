@@ -186,3 +186,116 @@ test("network failures are named, not reported as 'fetch failed'", () => {
   // An unrecognised cause must not surface the useless default.
   assert.equal(describeFetchError(new TypeError("fetch failed"), 8000), "site inacessível");
 });
+
+// ------------------------------------------------- JS shells and declared text
+
+const PROBES = [
+  { key: "enem", label: "ENEM", terms: ["enem"], meaning: "positive" as const, weight: 1 },
+];
+
+/**
+ * The case this was built for: 200 OK, a mount point, and nothing rendered.
+ *
+ * Before, the nav text was non-empty, so the pipeline sent it to the model with
+ * a full set of `false` probes — recording "we could not read it" as "it is not
+ * there".
+ */
+test("a JS shell is flagged, and its probes stay unknown rather than false", async () => {
+  const shell = `<html><head><title>Cursinho</title></head>
+    <body><div id="__next"></div><script>window.__NEXT_DATA__={}</script></body></html>`;
+  const http = stubHttp({
+    "https://shell.com.br/robots.txt": { status: 404 },
+    "https://shell.com.br": { body: shell },
+  });
+
+  const s = await crawlSite("https://shell.com.br", { http, probes: PROBES });
+  assert.equal(s.isJsShell, true);
+  assert.equal(s.structuredText, null);
+  // Not { enem: false } — nothing was legible, so nothing was concluded.
+  assert.deepEqual(s.probes, {});
+});
+
+test("a shell that declares a description is still readable", async () => {
+  const shell = `<html><head><title>Cursinho</title>
+    <meta name="description" content="Turmas preparatórias para o ENEM em Manaus.">
+    </head><body><div id="root"></div></body></html>`;
+  const http = stubHttp({
+    "https://shell2.com.br/robots.txt": { status: 404 },
+    "https://shell2.com.br": { body: shell },
+  });
+
+  const s = await crawlSite("https://shell2.com.br", { http, probes: PROBES });
+  assert.equal(s.isJsShell, true, "still a shell");
+  assert.equal(s.metaDescription, "Turmas preparatórias para o ENEM em Manaus.");
+  // The declared text rescues it: the probe is now answerable.
+  assert.deepEqual(s.probes, { enem: true });
+});
+
+// The regression guard: Parts A and B must not perturb a page that already read
+// fine. Probes, text, and the shell flag all behave as before.
+test("a normal content page is not a shell and probes unchanged", async () => {
+  const body = "conteúdo real ".repeat(60);
+  const page = `<html><head><title>Colégio</title></head><body><p>${body}ENEM</p></body></html>`;
+  const http = stubHttp({
+    "https://real.com.br/robots.txt": { status: 404 },
+    "https://real.com.br": { body: page },
+  });
+
+  const s = await crawlSite("https://real.com.br", { http, probes: PROBES });
+  assert.equal(s.isJsShell, false);
+  assert.equal(s.metaDescription, null);
+  assert.equal(s.jsonLd, null);
+  assert.deepEqual(s.probes, { enem: true });
+  assert.ok((s.textExcerpt ?? "").length > 400);
+});
+
+// A long page that happens to mount React is not a shell — the text is the test,
+// the mount point only disambiguates a short one.
+test("a mount point on a page that rendered is not a shell", async () => {
+  const page = `<html><body><div id="root"><p>${"texto ".repeat(200)}</p></div></body></html>`;
+  const http = stubHttp({
+    "https://spa.com.br/robots.txt": { status: 404 },
+    "https://spa.com.br": { body: page },
+  });
+  assert.equal((await crawlSite("https://spa.com.br", { http })).isJsShell, false);
+});
+
+// A thin page with no mount point is thin, not a shell — that distinction is
+// what keeps `isJsShell` meaning "JavaScript ate the content".
+test("a short plain page is thin but not a shell", async () => {
+  const http = stubHttp({
+    "https://tiny.com.br/robots.txt": { status: 404 },
+    "https://tiny.com.br": { body: "<html><body><p>Em breve.</p></body></html>" },
+  });
+  const s = await crawlSite("https://tiny.com.br", { http, probes: PROBES });
+  assert.equal(s.isJsShell, false);
+  assert.deepEqual(s.probes, { enem: false }, "we did read it, and the term is absent");
+});
+
+test("crawlSite surfaces JSON-LD from the page", async () => {
+  const ld = JSON.stringify({
+    "@type": "School",
+    name: "Colégio Alfa",
+    description: "Preparatório para concursos.",
+  });
+  const page = `<html><head><script type="application/ld+json">${ld}</script></head>
+    <body><p>${"aula ".repeat(120)}</p></body></html>`;
+  const http = stubHttp({
+    "https://alfa.com.br/robots.txt": { status: 404 },
+    "https://alfa.com.br": { body: page },
+  });
+
+  const s = await crawlSite("https://alfa.com.br", { http });
+  assert.equal(s.jsonLd?.name, "Colégio Alfa");
+  assert.match(s.structuredText ?? "", /Preparatório para concursos/);
+});
+
+// Link hubs never get fetched (crawl.ts short-circuits them), so every page
+// signal including the new ones must stay null — not false, not empty.
+test("a link hub leaves the new signals unknown", async () => {
+  const s = await crawlSite("https://instagram.com/cursinhodoze", { http: stubHttp({}) });
+  assert.equal(s.isLinkHub, true);
+  assert.equal(s.isJsShell, null, "never fetched, so unknown");
+  assert.equal(s.structuredText, null);
+  assert.equal(s.metaDescription, null);
+});

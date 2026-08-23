@@ -1,7 +1,15 @@
 export * from "./domain/index";
 export * from "./ports/index";
 export { createOpenRouterLlm, DEFAULT_MODELS, LlmError } from "./adapters/openrouter";
-export { compileSpec, type CompileInput, type CompileResult } from "./usecases/compileSpec";
+export {
+  compileSpec,
+  compileTargeting,
+  compileRubric,
+  isTargetingDraft,
+  type CompileInput,
+  type CompileResult,
+  type TargetingDraft,
+} from "./usecases/compileSpec";
 export { suggestCnaes, type CnaeSuggestion } from "./usecases/suggestCnaes";
 export {
   scoreCompanies,
@@ -44,9 +52,26 @@ export {
   dailyLimitAdvice,
   type RateLimitKind,
 } from "./services/rateLimit";
+export { createFallbackLlm, type FallbackOptions, type LlmLink } from "./adapters/fallback";
 export {
   createGeminiLlm,
   toGeminiSchema,
   GEMINI_DEFAULT_MODELS,
   GeminiError,
 } from "./adapters/gemini";
+
+export {
+  createDdgSearch,
+  DdgError,
+  DDG_SKU,
+  type DdgSearchOptions,
+} from "./adapters/ddgSearch";
+export {
+  findPresence,
+  verifyHits,
+  BlockStreak,
+  type PresenceHit,
+  type PresenceOutcome,
+  type PresenceProvider,
+  type PresenceCompany,
+} from "./usecases/findPresence";

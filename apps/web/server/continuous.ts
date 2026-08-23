@@ -20,6 +20,12 @@ import {
 } from "@cnpj/core";
 import { requireLlm, provider } from "../lib/llm";
 import { recordLlm, remainingToday, dailyLimit } from "../lib/llm-budget";
+import {
+  siteFromSignals,
+  toScoreCandidate,
+  hasReadableContent,
+  loadPresence,
+} from "./candidate";
 
 /**
  * Takes one company at a time from the base and runs it all the way through,
@@ -193,7 +199,7 @@ export async function runContinuous(
         }
       }
 
-      const readable = (signals?.textExcerpt ?? "").trim().length > 0;
+      const readable = hasReadableContent(signals);
 
       if (!spec || !readable) {
         // No page read means no evidence; the rubric can only answer
@@ -226,32 +232,18 @@ export async function runContinuous(
           .values({ projectId: input.projectId, cnpj: next.cnpj, ...row })
           .onConflictDoUpdate({ target: [scores.projectId, scores.cnpj], set: row });
       } else {
-        const candidate: ScoreCandidate = {
-          cnpj: next.cnpj,
-          razaoSocial: next.razaoSocial,
-          nomeFantasia: next.nomeFantasia,
-          cnae: next.cnae,
-          cnaeDescricao: next.cnaeDescricao,
-          uf: next.uf,
-          municipio: next.municipio,
-          dataInicioAtividade: next.dataInicioAtividade,
-          porte: next.porte,
-          mei: next.mei,
-          site: {
-            finalUrl: signals!.finalUrl,
-            isDead: signals!.isDead,
-            isLinkHub: signals!.isLinkHub,
-            isFreeBuilder: signals!.isFreeBuilder,
-            hasViewport: signals!.hasViewport,
-            hasWaLink: signals!.hasWaLink,
-            hasContactPath: signals!.hasContactPath,
-            platform: signals!.platform,
-            footerYear: signals!.footerYear,
-            title: signals!.title,
-            textExcerpt: signals!.textExcerpt,
-            probes: signals!.probes,
-          },
-        };
+        // No impression: this loop only ever scores a company it just pulled
+        // from the base, and nobody has laid eyes on it yet. Rescoring one with
+        // an impression is the sheet's job, not this loop's.
+        const candidate: ScoreCandidate = toScoreCandidate(
+          next,
+          siteFromSignals(signals!),
+          null,
+          // Normally empty: this loop scores a company it just pulled from the
+          // base. It is populated when the search stage ran over this CNPJ in
+          // an earlier session, and there is no reason to throw that away.
+          (await loadPresence(db, [next.cnpj])).get(next.cnpj)
+        );
 
         const [result] = await scoreCompanies(llmPort(), spec, [candidate], {
           batchSize: 1,
