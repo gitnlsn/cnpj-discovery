@@ -74,3 +74,16 @@ export {
   type PresenceProvider,
   type PresenceCompany,
 } from "./usecases/findPresence";
+export {
+  enrichLinkedIn,
+  planFetch,
+  orderPlans,
+  hasSubstance,
+  type LinkedInCandidate,
+  type LinkedInPlan,
+  type LinkedInFetcher,
+  type LinkedInStore,
+  type LinkedInStop,
+  type LinkedInEnrichStats,
+  type EnrichOptions,
+} from "./usecases/enrichLinkedIn";

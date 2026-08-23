@@ -199,6 +199,29 @@ CREATE TABLE IF NOT EXISTS usage (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (day, kind)
 );
+CREATE TABLE IF NOT EXISTS linkedin_pages (
+  cnpj                   TEXT NOT NULL,
+  url                    TEXT NOT NULL,
+  kind                   TEXT NOT NULL CHECK (kind IN ('entity','profile')),
+  slug                   TEXT,
+  name                   TEXT,
+  description            TEXT,
+  industry               TEXT,
+  employees_min          INTEGER,
+  employees_max          INTEGER,
+  employees_on_linkedin  INTEGER,
+  headquarters           TEXT,
+  website                TEXT,
+  founded                TEXT,
+  followers              INTEGER,
+  headline               TEXT,
+  location               TEXT,
+  error                  TEXT,
+  checked_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (cnpj, url)
+);
+CREATE INDEX IF NOT EXISTS linkedin_pages_checked_idx ON linkedin_pages (checked_at);
+
 `;
 
 /**

@@ -219,10 +219,17 @@ test("only profiles count as LinkedIn; posts and jobs do not", () => {
   }
 });
 
-test("classifyHit routes profiles to linkedin and everything else away", () => {
+test("classifyHit separates profiles, entity pages and everything else", () => {
   assert.equal(classifyHit("https://br.linkedin.com/in/maria"), "linkedin");
   assert.equal(classifyHit("https://www.linkedin.com/posts/maria_activity-1"), "resume");
-  assert.equal(classifyHit("https://www.linkedin.com/company/x"), "resume");
+
+  // This assertion used to read `"resume"`, and the change is deliberate rather
+  // than a fix. An entity page's *title* carries only the company name, which we
+  // already had — so while nothing could fetch the page, discarding it with the
+  // posts and job ads was right. It stops being right once something reads the
+  // page, where the employee band and the industry live. See
+  // `isLinkedInEntityUrl` and `usecases/enrichLinkedIn`.
+  assert.equal(classifyHit("https://www.linkedin.com/company/x"), "linkedin_company");
 });
 
 /**
@@ -239,6 +246,13 @@ test("no LinkedIn URL is ever classified as a crawlable site", () => {
     "https://br.linkedin.com/in/maria",
     "https://www.linkedin.com/posts/maria_activity-1",
     "https://lnkd.in/abc123",
+    // Added when entity pages became storable: they are now a `kind` the
+    // pipeline keeps, so the property that they are never a *crawlable site*
+    // matters more than it did, not less. `crawlSite` still honours robots.txt
+    // and must never be pointed at this host; the browser driver in
+    // `@cnpj/serp/linkedin` is the only thing allowed to fetch it.
+    "https://www.linkedin.com/company/cursinho-alfa",
+    "https://br.linkedin.com/company/cursinho-alfa/about",
   ]) {
     assert.notEqual(classifyHit(url), "site", url);
   }

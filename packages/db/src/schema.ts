@@ -371,3 +371,56 @@ export const usage = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.day, t.kind] })]
 );
+
+/**
+ * One LinkedIn page we fetched, and what it said.
+ *
+ * Kept out of `search_hits` on purpose. That table records what a *search engine*
+ * showed us, and its rows are cheap, plentiful and unattributable. These rows are
+ * the product of a signed-in fetch against a site whose robots.txt forbids it —
+ * they cost pacing, they carry account risk, and they are the thing to look at
+ * when deciding whether the feature was worth turning on. Mixing the two would
+ * make that question unanswerable.
+ *
+ * `error` is what makes a refusal distinguishable from an absence. A row with
+ * `error` set means we tried and were stopped; NO row means nobody looked. The
+ * one thing that must never happen is a clean row with every field null, which
+ * would read as "LinkedIn has nothing on this company" — see the long note in
+ * `findPresence` about exactly this failure mode on the search path.
+ */
+export const linkedinPages = sqliteTable(
+  "linkedin_pages",
+  {
+    cnpj: text("cnpj").notNull(),
+    /** The canonical URL fetched — `/company/<slug>/about/` or `/in/<slug>`. */
+    url: text("url").notNull(),
+    kind: text("kind", { enum: ["entity", "profile"] }).notNull(),
+    slug: text("slug"),
+    name: text("name"),
+    description: text("description"),
+    /** LinkedIn's own industry label, not a CNAE. */
+    industry: text("industry"),
+    /**
+     * The self-declared band. Two columns rather than a string so it can be
+     * filtered on; `employees_max` is null for an open-ended top band ("10.001+").
+     */
+    employeesMin: integer("employees_min"),
+    employeesMax: integer("employees_max"),
+    /** Members who list this company as employer — a count, not a claim. */
+    employeesOnLinkedin: integer("employees_on_linkedin"),
+    headquarters: text("headquarters"),
+    website: text("website"),
+    founded: text("founded"),
+    followers: integer("followers"),
+    /** Profiles only: what the person says they do. */
+    headline: text("headline"),
+    location: text("location"),
+    /** Why this fetch produced nothing. Null on a page we actually read. */
+    error: text("error"),
+    checkedAt: text("checked_at").notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.cnpj, t.url] }),
+    index("linkedin_pages_checked_idx").on(t.checkedAt),
+  ]
+);

@@ -12,6 +12,10 @@
   },
   "dependencies": {
     "@cnpj/core": "workspace:*",
-    "puppeteer-core": "^24.9.0"
+    "puppeteer-core": "^24.9.0",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

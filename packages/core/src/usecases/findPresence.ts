@@ -9,6 +9,7 @@ import {
   parseLinkedInTitle,
   titleLeadsWithName,
   isLinkedInBoilerplate,
+  entityTitleMatchesCompany,
 } from "../domain/linkedin";
 import type { SearchHit, SerpPage } from "../domain/serpParse";
 
@@ -121,6 +122,22 @@ export function verifyHits(hits: SearchHit[], company: PresenceCompany): Presenc
         matchedOn: "title",
         headline,
         // The site's marketing copy is not a description of anyone's business.
+        description: isLinkedInBoilerplate(hit.description) ? "" : hit.description,
+      });
+      continue;
+    }
+
+    if (kind === "linkedin_company") {
+      // A third gate, because neither of the other two fits. The generic name
+      // match fails on legal-name drift — the Receita's "COMERCIO DE PAES ALFA
+      // LTDA" against a page called "Padaria Alfa" — and `titleLeadsWithName`
+      // is a *person* gate that demands three tokens of a civil name. See
+      // `entityTitleMatchesCompany`.
+      if (!entityTitleMatchesCompany(hit.title, company)) continue;
+      out.push({
+        ...hit,
+        kind,
+        matchedOn: "title",
         description: isLinkedInBoilerplate(hit.description) ? "" : hit.description,
       });
       continue;

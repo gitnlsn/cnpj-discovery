@@ -16,7 +16,7 @@
  */
 
 import { hostOf, isHub, isSocialProfileUrl } from "./hosts";
-import { isLinkedInProfileUrl } from "./linkedin";
+import { isLinkedInProfileUrl, isLinkedInEntityUrl } from "./linkedin";
 
 /**
  * Sites that republish the Receita's own data.
@@ -163,10 +163,24 @@ const matches = (host: string, list: string[]) =>
  *   not a consolation prize; it is where the business actually lives.
  * - `site` — a domain of their own. The strongest result, and the only kind the
  *   crawler can read a page from.
+ * - `linkedin` — a person's profile. Its value is the headline; see
+ *   `domain/linkedin.ts` for why this host needs its own identity gate.
+ * - `linkedin_company` — an entity page (`/company/`, `/school/`, `/showcase/`).
+ *   A different document with different fields and a different identity gate:
+ *   what it carries is firmographic — employee band, industry, headquarters —
+ *   which is the one thing the Receita never publishes.
  * - `unknown` — an unparseable URL.
  */
 export type HitKind =
-  "aggregator" | "legal" | "document" | "resume" | "linkedin" | "social" | "site" | "unknown";
+  | "aggregator"
+  | "legal"
+  | "document"
+  | "resume"
+  | "linkedin"
+  | "linkedin_company"
+  | "social"
+  | "site"
+  | "unknown";
 
 export function classifyHit(url: string): HitKind {
   const host = hostOf(url);
@@ -187,7 +201,14 @@ export function classifyHit(url: string): HitKind {
   // position `domain/linkedin.ts` is able to trust. Those fall through to
   // `resume`, which is excluded, so the narrowing needs no kind of its own.
   if (matches(host, LINKEDIN)) {
-    return isLinkedInProfileUrl(url) ? "linkedin" : "resume";
+    if (isLinkedInProfileUrl(url)) return "linkedin";
+    // Entity pages used to fall through to `resume` and be discarded with the
+    // posts and job ads, which was right while nothing could read them: a
+    // company page's *title* carries only the name, and the name was already in
+    // our database. It stops being right once something fetches the page, where
+    // the employee band and the industry live.
+    if (isLinkedInEntityUrl(url)) return "linkedin_company";
+    return "resume";
   }
   // Reuses the crawler's own list rather than a second copy of it. Note the
   // inversion: for an established company a link hub means "no real site", and
@@ -212,7 +233,9 @@ export function classifyHit(url: string): HitKind {
  * where the company's own facts are in scope.
  */
 export function isStorableKind(kind: HitKind): boolean {
-  return kind === "social" || kind === "site" || kind === "linkedin";
+  return (
+    kind === "social" || kind === "site" || kind === "linkedin" || kind === "linkedin_company"
+  );
 }
 
 /**

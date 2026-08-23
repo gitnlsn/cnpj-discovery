@@ -4,15 +4,29 @@ import { normalizeName, MIN_NAME_TOKENS } from "./nameMatch";
 /**
  * Reading a LinkedIn profile out of a search-result title.
  *
- * We never fetch linkedin.com. Its robots.txt is `User-agent: *` → `Disallow: /`
- * — a blanket prohibition, restated in prose at the top of the file — and
- * `crawlSite` honours robots, so it would refuse. That is not an obstacle to
- * work around: the search engine already fetched the page, and the title it
- * gives back carries the one field worth having.
+ * The cheap path, and still the default one: the search engine already fetched
+ * the page, and the title it gives back carries the one field worth having. No
+ * request to linkedin.com is involved, so nothing here needs an account, a
+ * browser, or permission.
  *
  * The field is the headline. For a MEI it is frequently the only place the
  * business is stated in words — "Professora de Matemática | Fundadora do
  * Cursinho Alfa".
+ *
+ * ## What changed, and what did not
+ *
+ * This file used to open by saying we never fetch linkedin.com, because its
+ * robots.txt is `User-agent: *` → `Disallow: /` and `crawlSite` honours robots.
+ * That is still true of `crawlSite`, and the robots.txt still says what it said.
+ * What exists now is a second, opt-in path — `@cnpj/serp/linkedin` — that fetches
+ * entity and profile pages through a signed-in browser with robots deliberately
+ * overridden. It is off unless `LINKEDIN_ENABLED=1`, and the reasons it is
+ * opt-in rather than default are written where the fetching happens rather than
+ * here.
+ *
+ * The division of labour: everything in this file is pure and stays pure. It
+ * decides which URLs are worth fetching and whether a page belongs to the
+ * company we asked about. It never fetches anything itself.
  *
  * ## Why identity is the hard part here, and not elsewhere
  *
@@ -272,4 +286,157 @@ export function linkedInIsEvidence(
   if (hit.ambiguous) return false;
   if (!headlineHasSubstance(hit.headline)) return false;
   return !headlineRepeatsName(hit.headline, name);
+}
+
+// ------------------------------------------------------- company pages
+
+/**
+ * The other half of LinkedIn: pages that belong to an entity, not a person.
+ *
+ * Everything above this line reads a *person's* profile out of a search-result
+ * title, and it is deliberately paranoid because every field LinkedIn derives
+ * for a person is derived from their name — see the file docblock. A company page
+ * is a different problem with a different failure mode, so it gets its own gate
+ * rather than being squeezed through `titleLeadsWithName`, which would reject
+ * almost every real match: that function demands three tokens and an exact
+ * prefix, and "PADARIA ALFA LTDA" against a page called "Padaria Alfa" satisfies
+ * neither.
+ *
+ * The failure mode here is not namesakes, it is *legal-name drift*. The Receita
+ * knows "COMERCIO DE PAES ALFA LTDA"; LinkedIn knows "Padaria Alfa"; neither
+ * string contains the other. So the gate below is a two-directional prefix match
+ * against both the razão social and the nome fantasia, with the legal form
+ * stripped — and it accepts that this trades some recall for not attaching a
+ * stranger's company to a CNPJ.
+ */
+
+/** Legal forms, which identify a company's paperwork rather than the company. */
+const LEGAL_FORMS = new Set([
+  "LTDA",
+  "LIMITADA",
+  "ME",
+  "EPP",
+  "EIRELI",
+  "SA",
+  "CIA",
+  "MEI",
+  "EI",
+  "SS",
+]);
+
+/**
+ * Two tokens, not three, and the reason is not laziness.
+ *
+ * `MIN_NAME_TOKENS` is 3 because a person's name is drawn from a small pool —
+ * "ANA SOUZA" has thousands of bearers, so two tokens identify nobody. A trade
+ * name is not drawn from a pool: it was chosen to be distinguishable, and
+ * "Padaria Alfa" is a brand rather than a coincidence of given names.
+ *
+ * It is still only two tokens, so one generic word plus one generic word can
+ * collide — there is more than one "Padaria Alfa" in Brazil. That residual risk
+ * is why the URL must also have come from a search for this company (the caller
+ * guarantees it) rather than from a slug we guessed.
+ */
+export const MIN_COMPANY_TOKENS = 2;
+
+/**
+ * A company name reduced to the tokens that identify it.
+ *
+ * The legal form is stripped from the end only. A company genuinely called
+ * "Grupo SA Consultoria" keeps its middle token; one called "Alfa Ltda" loses
+ * the suffix that every third Brazilian company shares.
+ */
+export function companyNameTokens(raw: string | null | undefined): string[] {
+  const tokens = normalizeName(raw);
+  let end = tokens.length;
+  while (end > 0 && LEGAL_FORMS.has(tokens[end - 1]!)) end--;
+  return tokens.slice(0, end);
+}
+
+/**
+ * Is this LinkedIn URL an entity page — a company, school or showcase?
+ *
+ * All three are grouped because they are the same document shape with the same
+ * title convention, and a Brazilian SME that registered as a school
+ * (`/school/`) is still the company we are looking for. `/showcase/` is a
+ * product page hanging off a company, which is weaker evidence but the same
+ * kind of evidence.
+ *
+ * Note what this excludes: `/jobs/`, `/posts/`, `/pulse/` and a company's own
+ * `jobs` and `posts` sub-pages are documents *about* an entity rather than the
+ * entity's own page, and their titles do not follow the convention the parser
+ * depends on.
+ */
+export function isLinkedInEntityUrl(url: string): boolean {
+  try {
+    const path = new URL(url).pathname.toLowerCase().replace(/\/+$/, "");
+    const m = /^\/(?:[a-z]{2}\/)?(company|school|showcase)\/([^/]+)(\/.*)?$/.exec(path);
+    if (!m) return false;
+    const slug = m[2]!;
+    const tail = m[3] ?? "";
+    if (!slug || slug === "unavailable") return false;
+    // `/company/alfa/jobs` and `/company/alfa/posts` are other people's
+    // documents about this company. `/about` and `/life` are the entity's own.
+    return tail === "" || /^\/(about|life|people)$/.test(tail);
+  } catch {
+    return false;
+  }
+}
+
+/** The entity's slug, which is the stable key LinkedIn identifies it by. */
+export function linkedInEntitySlug(url: string): string | null {
+  try {
+    const path = new URL(url).pathname.toLowerCase().replace(/\/+$/, "");
+    const m = /^\/(?:[a-z]{2}\/)?(?:company|school|showcase)\/([^/]+)/.exec(path);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The canonical `/about` URL for an entity page.
+ *
+ * Normalised on purpose: the SERP hands back the locale-prefixed, tracking-laden
+ * form (`br.linkedin.com/company/alfa?trk=…`) and fetching that verbatim would
+ * store several URLs for one company and send LinkedIn a parameter that says
+ * where we got the link. `/about` rather than the root because the firmographic
+ * fields — employee band, industry, headquarters, founded — live there.
+ */
+export function linkedInAboutUrl(url: string): string | null {
+  const slug = linkedInEntitySlug(url);
+  if (!slug) return null;
+  return `https://www.linkedin.com/company/${slug}/about/`;
+}
+
+/**
+ * Does this entity page belong to this company?
+ *
+ * Prefix in either direction, against both names the Receita gave us, because
+ * neither string reliably contains the other: LinkedIn shortens
+ * ("Comercio de Paes Alfa Ltda" → "Padaria Alfa" fails, but
+ * "Alfa Consultoria Ltda" → "Alfa Consultoria" succeeds) and the nome fantasia
+ * is frequently the only one that matches at all.
+ *
+ * Returns false rather than guessing whenever either side is too short to
+ * identify anything — the same bias as everywhere else in this file, for the
+ * same reason: a wrong company attached to a CNPJ reaches the scorer as fact.
+ */
+export function entityTitleMatchesCompany(
+  title: string | null | undefined,
+  company: { razaoSocial?: string | null; nomeFantasia?: string | null }
+): boolean {
+  const { leading } = parseLinkedInTitle(title);
+  const page = companyNameTokens(leading);
+  if (page.length < MIN_COMPANY_TOKENS) return false;
+
+  const candidates = [company.razaoSocial, company.nomeFantasia]
+    .map(companyNameTokens)
+    .filter((t) => t.length >= MIN_COMPANY_TOKENS);
+
+  const pageStr = page.join(" ");
+  return candidates.some((tokens) => {
+    const ours = tokens.join(" ");
+    return pageStr.startsWith(ours) || ours.startsWith(pageStr);
+  });
 }

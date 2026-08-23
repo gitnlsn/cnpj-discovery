@@ -13,6 +13,8 @@
     "build": "pnpm --filter @cnpj/web build",
     "data:sync": "tsx --env-file-if-exists=.env scripts/sync-rf.ts",
     "data:query": "tsx --env-file-if-exists=.env scripts/query.ts",
+    "serp:login": "tsx --env-file-if-exists=.env scripts/serp-login.ts",
+    "linkedin:enrich": "tsx --env-file-if-exists=.env scripts/linkedin-enrich.ts",
     "db:migrate": "pnpm --filter @cnpj/db migrate",
     "db:backfill-address": "tsx --env-file-if-exists=.env scripts/backfill-address.ts",
     "typecheck": "pnpm -r typecheck",

@@ -565,3 +565,14 @@ export function createSerpDriver(opts: SerpDriverOptions) {
     },
   };
 }
+
+export { repoRoot, profileDir, chromePath, MAC_CHROME } from "./profile";
+export { sessionStatus, type SessionStatus } from "./session";
+export {
+  createLinkedInDriver,
+  LINKEDIN_RATE_LIMIT_STATUS,
+  type LinkedInDriver,
+  type LinkedInDriverOptions,
+  type LinkedInFetch,
+  type LinkedInMode,
+} from "./linkedin";

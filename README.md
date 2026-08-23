@@ -257,6 +257,64 @@ reprovou por ramo. Nenhuma regex ia pegar isso; ler a página pegou.
 
 ---
 
+## O LinkedIn é opt-in, e o motivo não é o de sempre
+
+A busca no Google já era opt-in por causa de CAPTCHA e 403. O LinkedIn é opt-in por
+um motivo diferente e mais sério, que vale escrever antes de qualquer instrução:
+
+> O Google bloqueia por **IP**, e o bloqueio passa sozinho. O LinkedIn bloqueia a
+> **conta**, e a restrição dele costuma ser definitiva. A escada de cooldown que
+> protege a busca no Google não desfaz uma conta restringida.
+
+Some-se a isso duas coisas que o resto do projeto não faz: o `robots.txt` do LinkedIn
+é `Disallow: /` para todo mundo — o `crawlSite` honra robots e recusaria, então este
+caminho não passa por ele — e a busca é **logada**, o que troca "algum IP nos raspou"
+por "este membro nos raspou". Ver a página de uma **pessoa** logado ainda aparece no
+"quem viu seu perfil" dela.
+
+Por isso, na ordem: use uma conta descartável, ligue com `LINKEDIN_ENABLED=1`, e
+saiba que as páginas de **empresa** vêm primeiro na fila — elas não deixam rastro em
+perfil de ninguém, então uma rodada interrompida gasta o teto na metade que não expõe
+a conta.
+
+```
+pnpm serp:login          # entra nas contas num Chrome sem automação
+LINKEDIN_ENABLED=1 pnpm linkedin:enrich --dry-run
+```
+
+O login é um comando separado porque o fluxo do Google **recusa** navegador
+controlado por DevTools — você chega em "este navegador ou app pode não ser seguro" e
+para ali. O `serp:login` abre o mesmo `userDataDir` sem CDP e sem
+`--enable-automation`; o cookie cai no perfil e a rodada seguinte herda.
+
+**O que ele acrescenta.** Nas páginas de empresa: faixa de funcionários, setor, sede,
+site e ano de fundação — gravados em `linkedin_pages`. A faixa de funcionários é a
+primeira resposta que o projeto tem para o critério que o painel marca como "não deu",
+porque a Receita não publica quadro de pessoal. Nos perfis: o cargo, que para MEI é
+onde o negócio aparece escrito.
+
+**Ainda não chega na nota.** As linhas são gravadas e consultáveis, mas nada lê
+`linkedin_pages` para dentro do `ScoreCandidate` — ligar isso é um passo separado, no
+`candidate.ts` e no prompt do rubric. Foi deixado de fora de propósito: vale medir o
+que as páginas realmente trazem antes de dar a elas peso na pontuação.
+
+**O que ele não acrescenta.** Nada sobre pessoas além do cargo, nenhuma aba
+`/people`, nenhuma lista de funcionários por nome. O projeto pontua empresas, e um
+cadastro do time de alguém seria dado pessoal coletado sem consentimento para
+responder uma pergunta que já estava respondida.
+
+**A fila vem da busca, não de chute.** Só entram URLs que já estão em `search_hits`,
+já conferidas contra a empresa. Nada aqui adivinha slug: um slug adivinhado que por
+acaso resolve prega o quadro de pessoal de outra empresa neste CNPJ, e prega em
+silêncio. Consequência prática: **se o Google nunca rodou, a fila está vazia** — o
+DuckDuckGo quase nunca devolve `linkedin.com`.
+
+**Um checkpoint encerra a rodada.** Não é uma tentativa que falhou e vai ser
+repetida: é o LinkedIn dizendo que notou. Insistir depois de um — mesmo devagar,
+mesmo depois de alguém resolver na mão — é o que transforma aviso em restrição. A
+recusa fica gravada em `linkedin_pages` com o motivo, para que "fomos recusados" não
+possa ser lido depois como "esta empresa não tem LinkedIn".
+
 ## Estrutura
 
 ```
@@ -268,6 +326,7 @@ packages/core/      domínio puro — sem I/O, sem process.env, sem console
 packages/data/      DuckDB sobre Parquet + o sync da Receita
 packages/db/        SQLite (Drizzle) — só o que o app produz
 packages/jobs/      trabalho longo no processo, progresso na tabela jobs
+packages/serp/      Chrome real: busca no Google e, opcionalmente, LinkedIn logado
 scripts/sync-rf.ts  baixa → filtra → Parquet. Roda no terminal, nunca no app.
 ```
 
@@ -289,6 +348,8 @@ trabalho por vez, no banco e não no JavaScript.
 | `pnpm data:sync`           | baixa e converte a base (`--parts 0,1,…`, `--dry-run`, `--period`, `--fresh`, `--offline`) |
 | `pnpm db:migrate`          | aplica o schema SQLite                                                                     |
 | `pnpm db:backfill-address` | preenche o endereço das empresas adicionadas antes da coluna existir                       |
+| `pnpm serp:login`          | abre o perfil do crawler num Chrome sem automação, para você entrar nas contas             |
+| `pnpm linkedin:enrich`     | lê as páginas do LinkedIn que a busca já achou (`--dry-run`, `--limit`)                    |
 | `pnpm test`                | testes                                                                                     |
 | `pnpm typecheck`           | tsc em todos os pacotes                                                                    |
 

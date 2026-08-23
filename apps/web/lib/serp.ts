@@ -1,10 +1,8 @@
 import "server-only";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { and, gte, inArray, sql } from "drizzle-orm";
 import { usage, type Db } from "@cnpj/db";
 import { createDdgSearch, DDG_SKU, type PresenceProvider } from "@cnpj/core";
-import { createSerpDriver } from "@cnpj/serp";
+import { createSerpDriver, profileDir } from "@cnpj/serp";
 
 /**
  * Web search, wired to a self-imposed ceiling.
@@ -22,26 +20,6 @@ import { createSerpDriver } from "@cnpj/serp";
  */
 
 export const GOOGLE_SKU = "serp.google";
-
-/**
- * The workspace root, not the cwd.
- *
- * Same reasoning as `dbPath()` in `@cnpj/db`, learned the same way: under
- * `next dev` the cwd is `apps/web`, so a cwd-relative default put a 147 MB
- * Chrome profile inside the app directory, where eslint then tried to lint
- * Chrome's own bundled JavaScript. The profile belongs beside `app.db` and
- * `data/` — one per repository, not one per whichever package happened to start.
- */
-function repoRoot(): string {
-  let dir = process.cwd();
-  for (let i = 0; i < 8; i++) {
-    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return process.cwd();
-}
 
 /** Both engines share one ceiling — the point is total volume, not per-engine. */
 const SKUS = [DDG_SKU, GOOGLE_SKU];
@@ -175,7 +153,10 @@ export function serpFor(
     // The profile is persisted so a solved CAPTCHA and the consent choice
     // survive the run — otherwise every session starts by asking a person again.
     const driver = createSerpDriver({
-      userDataDir: process.env.SERP_PROFILE_DIR ?? join(repoRoot(), ".serp-profile"),
+      // Resolved by `@cnpj/serp` rather than here, so `pnpm serp:login` opens
+      // the same directory this launches. A duplicated default would let the
+      // two drift, and the symptom would be a login that silently went nowhere.
+      userDataDir: profileDir(),
       executablePath: process.env.SERP_CHROME_PATH,
       // Headful by default: a hidden window cannot be handed to a human when
       // Google asks for a CAPTCHA, and that handoff is the whole strategy.
