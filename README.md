@@ -131,6 +131,17 @@ a coluna `error`, notas ficam vazias, e a linha aparece na aba "Falharam".
 lida, os sinais ficam `null`, não `false`. Quando foi lida inteira e nenhum termo do
 produto apareceu, o prompt diz isso na cara em vez de esperar que o modelo conclua.
 
+**Um nome confirmado é a pessoa, não o negócio.** A razão social de um MEI é o nome
+civil do dono, então achar "Maria Raquel Ribeiro Marques" na web confirma que existe
+_uma_ pessoa com esse nome — não que seja _esta_. Quem fecha essa distância é a
+descrição: um Instagram cuja bio diz "preparatório para concursos" se confirma
+sozinho. No LinkedIn a distância é maior, porque o endereço e o texto do perfil são
+gerados a partir do nome e não confirmam nada — e sobrenome comum no Brasil é a
+regra. Por isso um perfil só conta como evidência se o cargo disser o que a pessoa
+faz, dois perfis com o mesmo nome na mesma busca não contam nenhum, e a decisão de
+"isso é o negócio dele ou o emprego dele em outro lugar" é do modelo, com a regra
+escrita no prompt.
+
 **O que o seu ICP não virou.** A Receita não tem quadro de pessoal, faturamento nem
 stack. Um critério desses não vira filtro — e o painel diz isso, critério por critério:
 

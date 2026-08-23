@@ -15,7 +15,8 @@
  * against a named natural person is a liability rather than a lead.
  */
 
-import { hostOf, isHub } from "./hosts";
+import { hostOf, isHub, isSocialProfileUrl } from "./hosts";
+import { isLinkedInProfileUrl } from "./linkedin";
 
 /**
  * Sites that republish the Receita's own data.
@@ -26,6 +27,10 @@ import { hostOf, isHub } from "./hosts";
  */
 export const AGGREGATORS = [
   "cnpj.biz",
+  "maiscnpj.com.br",
+  "baseempresarial.com.br",
+  "empresasdobrasil.com.br",
+  "b2bleads.com.br",
   "cadastroempresa.com.br",
   "cnpj.faix.com.br",
   "faix.com.br",
@@ -82,15 +87,66 @@ export const LEGAL = [
   "consultaprocessos.com.br",
 ];
 
-/** Job boards and CV sites — a person's employment history, not a business. */
+/**
+ * Job boards and CV sites — a person's employment history, not a business.
+ *
+ * `linkedin.com` used to be here, and the reason was sound: a profile says where
+ * somebody works, not what they run. What changed is the *disposition*, not the
+ * reasoning — a MEI who tutors or consults often states the business in their
+ * headline, so LinkedIn now gets its own kind and its own gates rather than
+ * being dropped unread. The judgement about employers still stands, and it now
+ * lives in the prompt where the model can apply it case by case.
+ *
+ * Do not put it back here without reading `domain/linkedin.ts` first.
+ */
 export const RESUME = [
-  "linkedin.com",
+  "indeed.com",
   "indeed.com",
   "catho.com.br",
   "vagas.com.br",
   "infojobs.com.br",
   "trabalhabrasil.com.br",
   "glassdoor.com.br",
+];
+
+/**
+ * LinkedIn, including its own link shortener.
+ *
+ * `lnkd.in` matters more than it looks: unlisted it classifies as a plain
+ * `"site"`, and a `"site"` hit is handed to the crawler at
+ * `routers/enrichment.ts` — which would send `crawlSite` at linkedin.com, the
+ * one host this feature must never request.
+ */
+export const LINKEDIN = ["linkedin.com", "lnkd.in"];
+
+/**
+ * Places a person's name appears in a document rather than a business.
+ *
+ * From a live run: an academic paper on ResearchGate by a different João Pedro
+ * Carvalho Oliveira, an official notice from the basketball confederation, a
+ * soy-growers' association bulletin, a state government gazette, court filings
+ * uploaded to Scribd. Every one passed the name gate honestly — the name really
+ * is on the page — and none of them is evidence that a cursinho exists.
+ *
+ * This is the general-web version of the LinkedIn identity problem: matching a
+ * name finds documents about *a* person of that name. Gazettes are the worst
+ * offenders because Brazilian public administration publishes names constantly.
+ */
+export const DOCUMENTS = [
+  "gov.br",
+  "jus.br",
+  "oab.org.br",
+  "scribd.com",
+  "researchgate.net",
+  "academia.edu",
+  "passeidireto.com",
+  "docplayer.com.br",
+  "studylib.es",
+  "yumpu.com",
+  "issuu.com",
+  "slideshare.net",
+  "dou.gov.br",
+  "in.gov.br",
 ];
 
 const matches = (host: string, list: string[]) =>
@@ -109,7 +165,8 @@ const matches = (host: string, list: string[]) =>
  *   crawler can read a page from.
  * - `unknown` — an unparseable URL.
  */
-export type HitKind = "aggregator" | "legal" | "resume" | "social" | "site" | "unknown";
+export type HitKind =
+  "aggregator" | "legal" | "document" | "resume" | "linkedin" | "social" | "site" | "unknown";
 
 export function classifyHit(url: string): HitKind {
   const host = hostOf(url);
@@ -119,18 +176,43 @@ export function classifyHit(url: string): HitKind {
   // and "court record" is the more accurate label for what was found. Either
   // way it is excluded — only the recorded reason differs.
   if (matches(host, LEGAL)) return "legal";
+  // Gazettes, papers and uploaded filings: the name is genuinely there, and it
+  // is somebody being mentioned rather than somebody trading.
+  if (matches(host, DOCUMENTS)) return "document";
   if (matches(host, AGGREGATORS)) return "aggregator";
   if (matches(host, RESUME)) return "resume";
+  // LinkedIn before the link-hub check, and narrowed to actual profiles: a post
+  // or a job ad on the same host is a different kind of document, and its title
+  // puts the person's name in the middle rather than at the front — the one
+  // position `domain/linkedin.ts` is able to trust. Those fall through to
+  // `resume`, which is excluded, so the narrowing needs no kind of its own.
+  if (matches(host, LINKEDIN)) {
+    return isLinkedInProfileUrl(url) ? "linkedin" : "resume";
+  }
   // Reuses the crawler's own list rather than a second copy of it. Note the
   // inversion: for an established company a link hub means "no real site", and
   // here it means "here is the business".
-  if (isHub(host)) return "social";
+  //
+  // Narrowed to profiles for the same reason LinkedIn is: `instagram.com/p/…` is
+  // a post somebody wrote, and the name in it is usually somebody else's doing.
+  // A live run stored four posts and a Facebook group thread as this company's
+  // "social presence".
+  if (isHub(host)) return isSocialProfileUrl(url) ? "social" : "document";
   return "site";
 }
 
-/** Kinds that count as evidence of digital presence. */
-export function isUsefulKind(kind: HitKind): boolean {
-  return kind === "social" || kind === "site";
+/**
+ * Kinds worth recording.
+ *
+ * Renamed from `isUsefulKind`, which was ambiguous because it did two jobs: it
+ * gated what got stored AND, because the prompt reads those same rows back, what
+ * reached the model. Those are now separate questions — a LinkedIn profile whose
+ * headline says nothing is worth keeping as an audit trail and worth nothing as
+ * evidence. Storage is decided here; evidence is decided in `toScoreCandidate`,
+ * where the company's own facts are in scope.
+ */
+export function isStorableKind(kind: HitKind): boolean {
+  return kind === "social" || kind === "site" || kind === "linkedin";
 }
 
 /**

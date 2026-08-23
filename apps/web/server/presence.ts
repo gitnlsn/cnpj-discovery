@@ -1,7 +1,12 @@
 import "server-only";
 import { eq, sql } from "drizzle-orm";
 import { searchHits, searchLookups, scores, companies, crawls, type Db } from "@cnpj/db";
-import { findPresence, BlockStreak, type PresenceCompany } from "@cnpj/core";
+import {
+  findPresence,
+  BlockStreak,
+  linkedInIsEvidence,
+  type PresenceCompany,
+} from "@cnpj/core";
 import type { JobContext } from "@cnpj/jobs";
 import { serpFor, remainingToday, noteBlocked } from "../lib/serp";
 import { crawlIsReadable } from "./candidate";
@@ -44,6 +49,11 @@ export async function searchPresence(
 
   const chain = serpFor(db, {
     cancelled: () => jobCtx.cancelled(),
+    onWarmup: ({ sites }) =>
+      jobCtx.log(
+        `aquecendo o perfil do Chrome em ${sites} sites comuns antes de começar ` +
+          `(uma vez por rodada, não por empresa)`
+      ),
     onCaptcha: ({ query, waitingMs }) =>
       jobCtx.log(
         `⚠️  O Google pediu CAPTCHA. A janela do Chrome está aberta — resolva lá e eu sigo ` +
@@ -77,11 +87,21 @@ export async function searchPresence(
 
       if (outcome.status === "found") {
         stats.found++;
-        stats.improved.push(target.cnpj);
+        // `improved` drives the re-scoring stage, so it has to mean "gained
+        // evidence", not "gained a row". A company whose only hit is a LinkedIn
+        // profile with no usable headline would otherwise be re-scored, spending
+        // an LLM request to reach the same `cannot_determine` it already had.
+        const counted = outcome.hits.filter((h) =>
+          h.kind === "linkedin" ? linkedInIsEvidence(h, target.razaoSocial) : true
+        ).length;
+        if (counted) stats.improved.push(target.cnpj);
         const row = {
           provider: outcome.provider,
           query: outcome.query,
           considered: outcome.considered,
+          // Still "survived the gates", as the column is documented — NOT
+          // "reached the model". A LinkedIn row can be one without the other,
+          // and `stats.improved` above is what tracks the latter.
           verified: outcome.hits.length,
           checkedAt: now,
         };
@@ -95,6 +115,7 @@ export async function searchPresence(
             title: hit.title,
             description: hit.description,
             kind: hit.kind,
+            headline: hit.headline ?? null,
             matchedOn: hit.matchedOn,
             checkedAt: now,
           };
@@ -108,7 +129,12 @@ export async function searchPresence(
         }
         jobCtx.log(
           `${target.razaoSocial ?? target.cnpj}: ${outcome.hits.length}/${outcome.considered} ` +
-            `confirmados (${outcome.hits.map((h) => h.kind).join(", ")})`
+            `confirmados (${outcome.hits.map((h) => h.kind).join(", ")})` +
+            // Two numbers, because they differ: stored is not the same as
+            // counted, and the gap is the whole measurement this feature needs.
+            (counted < outcome.hits.length
+              ? ` — ${counted} com evidência de fato, ${outcome.hits.length - counted} só registrado`
+              : "")
         );
       } else if (outcome.status === "none") {
         // A real answer, recorded so the next run does not repeat the query.

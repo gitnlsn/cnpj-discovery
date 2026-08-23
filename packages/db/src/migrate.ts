@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS search_hits (
   title       TEXT,
   description TEXT,
   kind        TEXT,
+  headline    TEXT,
   matched_on  TEXT,
   checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (cnpj, url)
@@ -264,6 +265,7 @@ function upgradeCrawlUrlSource(sqlite: Database.Database): void {
  */
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: "projects", column: "spec_draft", type: "TEXT" },
+  { table: "search_hits", column: "headline", type: "TEXT" },
 ];
 
 function addMissingColumns(sqlite: Database.Database): void {

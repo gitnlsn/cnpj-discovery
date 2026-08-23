@@ -2,7 +2,9 @@ import {
   classifyReceitaPhone,
   buildWaMeLink,
   FREE_MAIL,
+  FREE_MAIL_ANY_TLD,
   TYPO_MAIL,
+  INSTITUTIONAL,
   ACCOUNTANT,
   ACCOUNTANT_WORD,
 } from "@cnpj/core/domain";
@@ -165,11 +167,23 @@ function where(f: CompanyFilters, params: unknown[]): string {
         `NOT regexp_matches(${domain}, ?)`,
         `${domain} NOT LIKE '%.gov.br'`,
         `${domain} NOT LIKE '%.cnt.br'`,
+        // A consumer provider on any suffix, and an institution's own domain.
+        // Both were added after the crawler learned to refuse them and this
+        // filter did not — which is precisely the drift the test in
+        // `test/receita.ts` exists to catch, and did.
+        `NOT regexp_matches(${domain}, ?)`,
+        `NOT regexp_matches(${domain}, ?)`,
         `NOT regexp_matches(${domain}, ?)`,
         `NOT regexp_matches(${domain}, ?)`,
       ].join(" AND ")
     );
-    params.push(TYPO_MAIL.source, ACCOUNTANT.source, ACCOUNTANT_WORD.source);
+    params.push(
+      TYPO_MAIL.source,
+      FREE_MAIL_ANY_TLD.source,
+      INSTITUTIONAL.source,
+      ACCOUNTANT.source,
+      ACCOUNTANT_WORD.source
+    );
   }
   if (f.isMobile) {
     // Same rule as normalizeBrazilianLocal: nine digits starting 9, or the

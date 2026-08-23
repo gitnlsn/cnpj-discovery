@@ -1,10 +1,15 @@
 import { matchStrength, searchQuery } from "../domain/nameMatch";
 import {
   classifyHit,
-  isUsefulKind,
+  isStorableKind,
   looksLikeRegistryMirror,
   type HitKind,
 } from "../domain/searchNoise";
+import {
+  parseLinkedInTitle,
+  titleLeadsWithName,
+  isLinkedInBoilerplate,
+} from "../domain/linkedin";
 import type { SearchHit, SerpPage } from "../domain/serpParse";
 
 /**
@@ -33,6 +38,16 @@ export interface PresenceHit extends SearchHit {
   kind: HitKind;
   /** Which field carried the name. Recorded so a run can be audited later. */
   matchedOn: "title" | "description" | "url";
+  /**
+   * For a LinkedIn profile: what the person says they do.
+   *
+   * Carried separately from `description` because it is derived from the title
+   * rather than the snippet, and because it is the only thing that makes a
+   * LinkedIn hit worth anything — see `domain/linkedin.ts`.
+   */
+  headline?: string | null;
+  /** Several profiles led with this name, so none of them identifies anybody. */
+  ambiguous?: boolean;
 }
 
 export type PresenceOutcome =
@@ -84,19 +99,61 @@ export function verifyHits(hits: SearchHit[], company: PresenceCompany): Presenc
     // Mirrors first: they match the name perfectly and mean nothing, so
     // checking the name before the host would waste the strongest evidence we
     // have on the least useful result.
-    if (!isUsefulKind(kind)) continue;
+    if (!isStorableKind(kind)) continue;
 
     // The content check, for the mirrors the host list has never heard of. A
     // live run found one on the first two companies it looked at, which is the
     // measure of how incomplete a domain list is always going to be.
     if (looksLikeRegistryMirror(hit)) continue;
 
+    if (kind === "linkedin") {
+      // A different identity gate, because the generic one cannot work on this
+      // host: the URL slug is generated from the display name, and the snippet
+      // often contains LinkedIn's own "Outras pessoas chamadas X" block — so
+      // both a slug match and a snippet match can be satisfied by a page about
+      // somebody else entirely. Only the leading position of the title is
+      // trustworthy. See domain/linkedin.ts.
+      if (!titleLeadsWithName(hit.title, name)) continue;
+      const { headline } = parseLinkedInTitle(hit.title);
+      out.push({
+        ...hit,
+        kind,
+        matchedOn: "title",
+        headline,
+        // The site's marketing copy is not a description of anyone's business.
+        description: isLinkedInBoilerplate(hit.description) ? "" : hit.description,
+      });
+      continue;
+    }
+
     const { matched, where } = matchStrength(hit, name);
     if (!matched || !where) continue;
 
     out.push({ ...hit, kind, matchedOn: where });
   }
-  return out;
+
+  return dropAmbiguousProfiles(out);
+}
+
+/**
+ * Two people with the same name is proof the name identifies neither.
+ *
+ * If one search returns several distinct LinkedIn profiles all leading with this
+ * name, the name is not a key — it is a coincidence generator, which for
+ * `Silva` it always was. Picking the top one would be choosing at random and
+ * presenting the result as verified.
+ *
+ * They are still returned for storage, so the ambiguity is on record and
+ * countable; what they lose is the headline, which is what would have made any
+ * of them count as evidence.
+ */
+function dropAmbiguousProfiles(hits: PresenceHit[]): PresenceHit[] {
+  const profiles = hits.filter((h) => h.kind === "linkedin");
+  if (profiles.length < 2) return hits;
+
+  return hits.map((h) =>
+    h.kind === "linkedin" ? { ...h, headline: null, ambiguous: true } : h
+  );
 }
 
 /**

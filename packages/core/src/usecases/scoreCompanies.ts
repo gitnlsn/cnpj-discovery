@@ -285,7 +285,10 @@ export async function scoreCompanies(
   // not per batch, so promptSha means one thing for the run.
   const withImpressions = candidates.some((c) => Boolean(c.impression?.trim()));
   const withWebPresence = candidates.some((c) => Boolean(c.webPresence?.length));
-  const system = buildRubricPrompt(spec, { withImpressions, withWebPresence });
+  const withLinkedIn = candidates.some((c) =>
+    c.webPresence?.some((p) => p.kind === "linkedin")
+  );
+  const system = buildRubricPrompt(spec, { withImpressions, withWebPresence, withLinkedIn });
   const schema = buildScoreSchema(spec);
   const sha = promptSha(system);
   const axisKeys = spec.rubric.axes.map((a) => a.key);

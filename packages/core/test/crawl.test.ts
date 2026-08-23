@@ -299,3 +299,53 @@ test("a link hub leaves the new signals unknown", async () => {
   assert.equal(s.structuredText, null);
   assert.equal(s.metaDescription, null);
 });
+
+// ----------------------------------------- domains that are not the company's
+
+/**
+ * Every one of these was measured in the live base, not imagined.
+ *
+ * A dead guess is harmless — the crawl fails and the signals stay null. These
+ * are the guesses that SUCCEED and hand the scorer somebody else's page as this
+ * company's website, which is fabricated evidence and much worse than nothing.
+ */
+test("mistyped consumer providers never become a website", () => {
+  for (const email of [
+    "x@homail.com", // missing t
+    "x@gmil.com", // missing a
+    "x@outook.com", // missing l
+    "x@gmail.con", // the TLD is the typo, so a valid-TLD anchor could not match
+  ]) {
+    assert.equal(websiteFromEmail(email), null, email);
+  }
+});
+
+// yahoo.es, yahoo.fr and yahoo.it were each crawled and each returned ~2.5 KB
+// of Yahoo's national portal.
+test("a consumer provider on a foreign suffix is still a consumer provider", () => {
+  for (const email of ["x@yahoo.es", "x@yahoo.fr", "x@yahoo.it", "x@hotmail.co.uk"]) {
+    assert.equal(websiteFromEmail(email), null, email);
+  }
+});
+
+/**
+ * The most expensive one, because it worked: `unicesumar.edu.br` was crawled as
+ * a company's site and read 8,000 characters of a real university's homepage —
+ * which scores like a substantial, professional operation.
+ */
+test("an institutional address belongs to the institution, not the person", () => {
+  for (const email of [
+    "x@unicesumar.edu.br",
+    "x@uni9.edu.br",
+    "x@ifma.edu.br",
+    "x@adv.oabsp.org.br",
+    "x@tribunal.jus.br",
+  ]) {
+    assert.equal(websiteFromEmail(email), null, email);
+  }
+});
+
+test("a real company domain still passes all of it", () => {
+  assert.equal(websiteFromEmail("contato@cursinhoalfa.com.br"), "https://cursinhoalfa.com.br");
+  assert.equal(websiteFromEmail("vendas@suapadaria.com.br"), "https://suapadaria.com.br");
+});

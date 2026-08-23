@@ -16,3 +16,5 @@ app.db-*
 gmaps-whatsapp-extractor/
 
 .serp-profile/
+# The old cwd-relative location, before serp.ts learned to find the repo root.
+apps/web/.serp-profile/

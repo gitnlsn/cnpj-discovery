@@ -7,7 +7,14 @@ import {
 } from "../domain/structured";
 import type { Probe } from "../domain/spec";
 import type { HttpPort } from "../ports/index";
-import { FREE_MAIL, TYPO_MAIL, ACCOUNTANT, ACCOUNTANT_WORD } from "../domain/mail";
+import {
+  FREE_MAIL,
+  FREE_MAIL_ANY_TLD,
+  TYPO_MAIL,
+  INSTITUTIONAL,
+  ACCOUNTANT,
+  ACCOUNTANT_WORD,
+} from "../domain/mail";
 import { hostOf, isHub, isBuilder } from "../domain/hosts";
 
 /**
@@ -42,7 +49,14 @@ export function websiteFromEmail(email: string | null): string | null {
     .toLowerCase();
   if (!domain || !domain.includes(".") || domain.length < 5) return null;
   if (FREE_MAIL.has(domain) || TYPO_MAIL.test(domain)) return null;
+  // A consumer provider on any country suffix. yahoo.es and yahoo.fr were each
+  // crawled as a Brazilian company's homepage before this line existed.
+  if (FREE_MAIL_ANY_TLD.test(domain)) return null;
   if (domain.endsWith(".gov.br")) return null;
+  // The domain belongs to the institution, not the person who has an address
+  // there. A MEI with a university address is a student or a lecturer, and
+  // guessing from it hands the scorer 8 KB of the university's homepage.
+  if (INSTITUTIONAL.test(domain)) return null;
 
   // .cnt.br is Brazil's reserved TLD for accountants, and an accounting office
   // registering the CNPJ puts its own address in the record.

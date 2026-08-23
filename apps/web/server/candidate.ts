@@ -1,7 +1,7 @@
 import "server-only";
 import { inArray } from "drizzle-orm";
 import { searchHits, type crawls, type Db } from "@cnpj/db";
-import type { ScoreCandidate, SiteSignals } from "@cnpj/core";
+import { linkedInIsEvidence, type ScoreCandidate, type SiteSignals } from "@cnpj/core";
 
 /**
  * One place that turns rows into a `ScoreCandidate`.
@@ -130,26 +130,52 @@ export type SearchHitRow = {
   title: string | null;
   description: string | null;
   kind: string | null;
+  headline: string | null;
 };
 
+/**
+ * Which stored hits reach the model, and in what shape.
+ *
+ * The evidence decision lives here rather than in the writer, so the rule can be
+ * improved without a migration or a backfill of rows already on disk — and it
+ * lives here rather than in `loadPresence` because it needs the company's own
+ * razão social, which is only in scope once `toScoreCandidate` has the facts.
+ *
+ * A LinkedIn hit that does not qualify is not dropped from the database, only
+ * from the prompt. That is the whole point of the split: the row stays as an
+ * audit trail and as the denominator for "is LinkedIn worth keeping at all".
+ */
 export function presenceFromHits(
-  rows: SearchHitRow[] | undefined
+  rows: SearchHitRow[] | undefined,
+  razaoSocial: string | null = null
 ): ScoreCandidate["webPresence"] {
   if (!rows?.length) return undefined;
-  return rows.map((r) => ({
-    url: r.url,
-    title: r.title ?? "",
-    description: r.description ?? "",
-    kind: r.kind ?? "site",
-  }));
+
+  const out = rows
+    .filter((r) =>
+      r.kind === "linkedin" ? linkedInIsEvidence({ headline: r.headline }, razaoSocial) : true
+    )
+    .map((r) => ({
+      url: r.url,
+      title: r.title ?? "",
+      description:
+        // For LinkedIn the headline IS the description: it is the field that
+        // says what the person does, and the snippet is usually the site's own
+        // marketing copy.
+        r.kind === "linkedin" ? (r.headline ?? "") : (r.description ?? ""),
+      kind: r.kind ?? "site",
+    }));
+
+  return out.length ? out : undefined;
 }
 
 export function toScoreCandidate(
   c: CompanyFacts,
   site: ScoreCandidate["site"],
   impression: string | null = null,
-  webPresence: ScoreCandidate["webPresence"] = undefined
+  hits: SearchHitRow[] | undefined = undefined
 ): ScoreCandidate {
+  const webPresence = presenceFromHits(hits, c.razaoSocial);
   return {
     cnpj: c.cnpj,
     razaoSocial: c.razaoSocial,
@@ -178,11 +204,22 @@ export function toScoreCandidate(
  * treats differently from one searched with nothing found — `search_lookups`
  * holds that second fact.
  */
+/**
+ * How well-founded each kind of hit is, best first.
+ *
+ * Only `PRESENCE_HITS` of them reach the model, so this decides what gets cut. A
+ * site we can actually crawl outranks a social profile whose bio is the
+ * storefront, and both outrank a LinkedIn headline — because on LinkedIn every
+ * field is derived from the name, so it is the one kind where we are least sure
+ * we have the right person at all.
+ */
+const KIND_RANK: Record<string, number> = { site: 0, social: 1, linkedin: 2 };
+
 export async function loadPresence(
   db: Db,
   cnpjs: string[]
-): Promise<Map<string, ScoreCandidate["webPresence"]>> {
-  const out = new Map<string, ScoreCandidate["webPresence"]>();
+): Promise<Map<string, SearchHitRow[]>> {
+  const out = new Map<string, SearchHitRow[]>();
   if (!cnpjs.length) return out;
 
   const rows = await db
@@ -192,6 +229,7 @@ export async function loadPresence(
       title: searchHits.title,
       description: searchHits.description,
       kind: searchHits.kind,
+      headline: searchHits.headline,
     })
     .from(searchHits)
     .where(inArray(searchHits.cnpj, cnpjs));
@@ -203,10 +241,10 @@ export async function loadPresence(
     byCnpj.set(r.cnpj, list);
   }
   for (const [cnpj, list] of byCnpj) {
-    // A site of their own outranks a social profile: the crawler can actually
-    // read one, and the renderer only shows the first few.
-    list.sort((a, b) => (a.kind === "site" ? -1 : 0) - (b.kind === "site" ? -1 : 0));
-    out.set(cnpj, presenceFromHits(list));
+    list.sort(
+      (a, b) => (KIND_RANK[a.kind ?? "site"] ?? 9) - (KIND_RANK[b.kind ?? "site"] ?? 9)
+    );
+    out.set(cnpj, list);
   }
   return out;
 }

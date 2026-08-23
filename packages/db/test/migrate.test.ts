@@ -219,3 +219,65 @@ test("as tabelas de busca nascem na base nova", () => {
   assert.equal(hit.kind, "social");
   assert.equal(hit.matched_on, "title");
 });
+
+/**
+ * A coluna `headline` chegou depois que `search_hits` já existia.
+ *
+ * `CREATE TABLE IF NOT EXISTS` é no-op numa base que já está no disco, então
+ * quem faz o trabalho aqui é a entrada em `ADDED_COLUMNS`. Esquecer essa entrada
+ * não quebra nada na migração — quebra depois, no INSERT, em produção. É esse o
+ * motivo deste teste.
+ */
+test("search_hits ganha a coluna headline sem perder as linhas", () => {
+  const path = tmp();
+  const sqlite = new Database(path);
+  sqlite.exec(`
+    CREATE TABLE search_hits (
+      cnpj        TEXT NOT NULL,
+      url         TEXT NOT NULL,
+      title       TEXT,
+      description TEXT,
+      kind        TEXT,
+      matched_on  TEXT,
+      checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      PRIMARY KEY (cnpj, url)
+    );
+    INSERT INTO search_hits (cnpj, url, title, kind, matched_on)
+      VALUES ('68464469000115', 'https://instagram.com/x', 'Maria', 'social', 'title');
+  `);
+  sqlite.close();
+
+  migrate(path);
+
+  const db = new Database(path);
+  const cols = (
+    db.prepare("SELECT name FROM pragma_table_info('search_hits')").all() as {
+      name: string;
+    }[]
+  ).map((c) => c.name);
+  assert.ok(cols.includes("headline"), `headline ausente: ${cols.join(", ")}`);
+
+  // A linha antiga sobreviveu, com headline nulo — que é o correto: ninguém
+  // extraiu nada dela, e nulo é diferente de "extraí e estava vazio".
+  const old = db.prepare("SELECT title, kind, headline FROM search_hits").get() as {
+    title: string;
+    kind: string;
+    headline: string | null;
+  };
+  assert.equal(old.title, "Maria");
+  assert.equal(old.kind, "social");
+  assert.equal(old.headline, null);
+
+  // E o valor novo entra.
+  db.prepare("INSERT INTO search_hits (cnpj, url, kind, headline) VALUES (?,?,?,?)").run(
+    "1",
+    "https://br.linkedin.com/in/x",
+    "linkedin",
+    "Professora de Matemática"
+  );
+  const fresh = db.prepare("SELECT headline FROM search_hits WHERE cnpj = '1'").get() as {
+    headline: string;
+  };
+  db.close();
+  assert.equal(fresh.headline, "Professora de Matemática");
+});

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseDuckDuckGo, parseGoogle, unwrapRedirect } from "../src/domain/serpParse";
-import { classifyHit, isUsefulKind } from "../src/domain/searchNoise";
+import { classifyHit, isStorableKind } from "../src/domain/searchNoise";
 
 /**
  * A real page saved from html.duckduckgo.com, not markup I invented.
@@ -76,7 +76,7 @@ test("most results for a company name are CNPJ mirrors", () => {
   const aggregators = kinds.filter((k) => k === "aggregator").length;
   assert.ok(aggregators >= 2, `expected mirrors to dominate, got ${JSON.stringify(kinds)}`);
   assert.ok(
-    kinds.some((k) => !isUsefulKind(k)),
+    kinds.some((k) => !isStorableKind(k)),
     "and they are excluded as evidence"
   );
 });

@@ -126,6 +126,43 @@ vende. Quem prova isso é a DESCRIÇÃO do resultado:
 Para MEI é o normal — é onde o negócio vive. Não penalize por isso; o que pesa é
 o que a descrição diz do ramo e do tamanho.`;
 
+/**
+ * How to weigh a LinkedIn headline.
+ *
+ * A separate block rather than an edit to `WEB_PRESENCE_RULES`, and that is not
+ * tidiness: editing that text in place would change `promptSha` for every run
+ * that ever had presence evidence, including ones already scored. This appends
+ * only when a LinkedIn hit is actually present.
+ *
+ * The content is a correction. `WEB_PRESENCE_RULES` tells the model that a
+ * description naming an activity is real evidence of the line of business —
+ * which is true of an Instagram bio and false of a LinkedIn headline, because a
+ * headline names the person's *employment*. "Analista na Prefeitura" is a
+ * perfectly substantive headline and is evidence AGAINST this being a business.
+ * A keyword rule cannot make that call; a reader can.
+ */
+const LINKEDIN_RULES = `Algumas presenças são perfis do LinkedIn. Trate-as diferente das outras.
+
+O que um "cargo" do LinkedIn é: o que a PESSOA diz que faz da vida. Isso pode ser
+o negócio dela ("Fundadora do Cursinho Alfa", "Confeiteira", "Professora
+particular") ou pode ser o EMPREGO dela em outro lugar ("Analista na Prefeitura",
+"Vendedor na Casas Bahia"). São coisas opostas para nós:
+- Cargo que descreve o próprio negócio, e combina com o CNAE: evidência real.
+- Cargo que é emprego em outra empresa: isso é evidência de que a pessoa TEM
+  EMPREGO, não de que o MEI dela funciona. Não sustenta nota alta. Se o CNAE diz
+  "cursos preparatórios" e o cargo diz "analista de sistemas", diga isso na
+  justificativa em vez de forçar uma conexão.
+- Na dúvida entre as duas, confidence "low".
+
+E confie MENOS no nome aqui do que nas outras presenças. Um perfil do LinkedIn
+tem o nome no endereço e no texto porque o LinkedIn gera os dois a partir do
+nome — nada ali confirma que é ESTA pessoa, e sobrenome comum no Brasil é a
+regra, não a exceção. Um Instagram cuja bio fala do ramo se confirma sozinho; um
+perfil do LinkedIn não.
+
+Nunca escreva um hook citando o LinkedIn de alguém como se você tivesse certeza
+de que é a pessoa certa.`;
+
 const ADVICE_RULES = `O campo "advice" é para VOCÊ, não para o cliente: uma frase dizendo o que fazer
 com esse lead e por quê. Cite o sinal que decidiu a nota. Se a página não foi
 lida, diga isso — "sem site conhecido, vale procurar antes de abordar" é um
@@ -151,6 +188,14 @@ export interface RubricPromptOptions {
    * keeps exactly the prompt it always had, and therefore its promptSha too.
    */
   withWebPresence?: boolean;
+  /**
+   * True when at least one company carries a LinkedIn profile hit.
+   *
+   * Its own flag rather than folded into `withWebPresence`, so a run with only
+   * Instagram evidence keeps exactly the prompt — and the promptSha — it had
+   * before LinkedIn existed.
+   */
+  withLinkedIn?: boolean;
 }
 
 export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions = {}): string {
@@ -159,6 +204,7 @@ export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions =
   parts.push(EVIDENCE_RULES);
   if (opts.withImpressions) parts.push(IMPRESSION_RULES);
   if (opts.withWebPresence) parts.push(WEB_PRESENCE_RULES);
+  if (opts.withLinkedIn) parts.push(LINKEDIN_RULES);
 
   parts.push(
     `Você avalia empresas brasileiras como potenciais clientes de:\n${spec.summary}\n\n` +

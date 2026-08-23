@@ -46,9 +46,52 @@ export const FREE_MAIL = new Set([
 /**
  * Mistyped consumer providers. These resolve to parking or spam pages and
  * would otherwise be scored as though the business owned the domain.
+ *
+ * Widened after reading what the base actually contains. The earlier version
+ * required a well-formed `.com`/`.com.br`, which missed two whole families:
+ *
+ * - a mistyped provider name: `homail.com`, `gmil.com`, `outook.com`;
+ * - a mistyped TLD: `gmail.con`, where the provider is spelled right and the
+ *   suffix is not, so anchoring on a valid TLD could never match it.
+ *
+ * All of them are registered domains — typosquatters park on exactly these —
+ * so the crawl succeeds and returns an ad page that becomes the company's
+ * "website". A dead domain is harmless; a parked one is fabricated evidence.
  */
-export const TYPO_MAIL =
-  /^(gmai|gmial|gmail|hotmai|hotmial|outlok|yaho|uol|bol|terra|ig|globo)\.(com|com\.br)$/;
+const PROVIDER_STEMS =
+  "gmai|gmial|gmail|gmil|gmailc|gemail|hotmai|hotmial|homail|hotmal|hotmil|" +
+  "outlok|outook|outlook|otlook|yaho|yahho|uol|bol|terra|ig|globo|iclod|icloud";
+
+export const TYPO_MAIL = new RegExp(
+  // Either a mistyped stem on a plausible suffix, or a correctly spelled
+  // provider on a mistyped one.
+  `^(?:(?:${PROVIDER_STEMS})\\.(?:com|com\\.br|net|br)` +
+    `|(?:gmail|hotmail|outlook|yahoo|icloud|live|terra|uol|bol)\\.(?:c[o0]n|cm|om|comm|co|bt|cim|xom|vom))$`
+);
+
+/**
+ * Consumer providers on any country suffix.
+ *
+ * `yahoo.es`, `yahoo.fr` and `yahoo.it` were each crawled as though they were a
+ * Brazilian company's homepage, returning 2.5 KB of Yahoo's Spanish portal to
+ * the scorer. `FREE_MAIL` lists the Brazilian and .com forms; a Brazilian MEI
+ * with a yahoo.es address is still just somebody with a Yahoo address.
+ */
+export const FREE_MAIL_ANY_TLD =
+  /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|aol|protonmail)\./;
+
+/**
+ * Institutions whose domain belongs to the institution, not to the person.
+ *
+ * A MEI who registered a university address is a student or a lecturer there.
+ * Guessing a website from it hands the scorer `unicesumar.edu.br` — 8,000
+ * characters of a real university's homepage — as this company's site, which
+ * reads as a substantial, professional operation. That was measured, not
+ * imagined. `.gov.br` was already excluded for the same reason; these are the
+ * rest of the family.
+ */
+export const INSTITUTIONAL =
+  /(\.edu\.br|\.edu|\.ac\.br|oab[a-z]{0,2}\.org\.br|\.jus\.br|\.mil\.br|\.leg\.br|\.g12\.br)$/;
 
 /**
  * Brazilian accounting-office markers — the classic wrong attribution, because

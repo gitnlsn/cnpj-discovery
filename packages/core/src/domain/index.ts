@@ -4,6 +4,7 @@ export * from "./structured";
 export * from "./hosts";
 export * from "./nameMatch";
 export * from "./searchNoise";
+export * from "./linkedin";
 export * from "./serpParse";
 export * from "./icp";
 export * from "./spec";

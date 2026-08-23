@@ -55,6 +55,80 @@ const LONG_PAUSE_MS = 75_000;
 /** Consecutive refusals before the driver stops asking at all. */
 const MAX_CONSECUTIVE_BLOCKS = 3;
 
+/**
+ * Ordinary sites visited to give the profile a history.
+ *
+ * Homepages only, nothing read, nothing stored — the point is the cookies and
+ * the history entries, not the content. Overridable with SERP_WARMUP_SITES so
+ * this list is a default rather than a decree.
+ *
+ * Honest about the mechanism: Google does not observe your traffic to g1 or
+ * UOL, so this cannot launder a blocked IP. What it plausibly does is make the
+ * profile look less like one that has only ever issued /search requests — via
+ * the Google-owned tags (Analytics, AdSense, Fonts) these sites embed, which are
+ * the only channel through which any of this is visible to them at all.
+ *
+ * The one part that is measured: three visits took the profile from 13 cookies
+ * to 28, so it does accumulate a history. Whether that history changes any
+ * decision Google makes is unknown and unmeasurable from here. Cheap, requested,
+ * and not to be mistaken for the fix — the binding constraints are query volume
+ * and IP reputation.
+ */
+const WARMUP_SITES = [
+  "https://www.uol.com.br/",
+  "https://g1.globo.com/",
+  "https://www.terra.com.br/",
+  "https://www.estadao.com.br/",
+  "https://www.cnnbrasil.com.br/",
+  "https://olhardigital.com.br/",
+  "https://www.tecmundo.com.br/",
+];
+
+/** How many sites to visit when warming a session. */
+const WARMUP_COUNT = 3;
+
+/** Visit one unrelated site every N queries. 0 disables it. */
+const DECOY_EVERY = 5;
+
+/**
+ * Cookie-consent buttons, by the framework that put them there.
+ *
+ * MEASURED, and the measurement is worth writing down: on uol, g1, cnnbrasil,
+ * estadao and olhardigital, with a fresh profile in pt-BR and a 4.5 second wait,
+ * there was **no consent banner at all** — no OneTrust, no Didomi, no accept
+ * button of any kind. LGPD does not push Brazilian sites into the blocking
+ * modals GDPR produced in Europe, so on the default site list this code never
+ * fires.
+ *
+ * It is kept anyway, because it is bounded and free, and because the site list
+ * is configurable: point SERP_WARMUP_SITES at a European domain and the banner
+ * appears. Nobody should read this list and conclude that clicking through
+ * consent is doing any work here today.
+ */
+const CONSENT_SELECTORS = [
+  "#onetrust-accept-btn-handler",
+  "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+  "#CybotCookiebotDialogBodyButtonAccept",
+  ".osano-cm-accept-all",
+  "button[mode='primary'][aria-label*='Aceitar']",
+  "button[data-testid='uc-accept-all-button']",
+  "#didomi-notice-agree-button",
+  ".fc-cta-consent",
+  "[aria-label='Aceitar cookies']",
+  "#adopt-accept-all-button",
+];
+
+/**
+ * Text that means "yes, accept".
+ *
+ * The fallback when no known vendor is present. Deliberately a tight list: this
+ * clicks a button on a page we did not write, so it must not match anything that
+ * could reject, configure, subscribe or buy. "Aceitar" and "Concordo" and their
+ * English forms, nothing looser.
+ */
+const CONSENT_TEXT =
+  /^(aceitar( todos| todos os cookies| e fechar| cookies)?|aceito|concordo|entendi|ok, entendi|prosseguir|continuar e aceitar|accept( all| all cookies| cookies)?|i agree|got it|allow all)$/i;
+
 export type CaptchaOutcome = "solved" | "timeout" | "cancelled";
 
 export interface SerpDriverOptions {
@@ -75,6 +149,8 @@ export interface SerpDriverOptions {
   captchaTimeoutMs?: number;
   /** Called when a person is needed. The app logs this into the job. */
   onCaptcha?: (info: { query: string; reason: string; waitingMs: number }) => void;
+  /** Called when a session is being warmed, so the job log can say so. */
+  onWarmup?: (info: { sites: number }) => void;
   /** Called once the page comes back, however it came back. */
   onCaptchaResolved?: (info: { outcome: CaptchaOutcome; waitedMs: number }) => void;
   /** Checked while waiting, so the job's cancel button still works. */
@@ -151,6 +227,8 @@ export function createSerpDriver(opts: SerpDriverOptions) {
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
+
+    if (!headless && process.env.SERP_WARMUP !== "off") await warmProfile(page);
     return page;
   }
 
@@ -205,6 +283,95 @@ export function createSerpDriver(opts: SerpDriverOptions) {
   }
 
   /**
+   * Dismisses a cookie banner, if one is in the way.
+   *
+   * Known vendor selectors first, then a tight text match. It clicks a button on
+   * a page we did not write, so the text list is deliberately narrow — anything
+   * looser risks clicking "subscribe" or "reject" or worse. Failure is fine: a
+   * banner left standing costs nothing here, since we never read the page.
+   */
+  async function acceptCookies(p: Page): Promise<boolean> {
+    for (const selector of CONSENT_SELECTORS) {
+      try {
+        const el = await p.$(selector);
+        if (el) {
+          await el.click({ delay: 40 });
+          await wait(400);
+          return true;
+        }
+      } catch {
+        // Detached or invisible; try the next one.
+      }
+    }
+
+    // Fallback: find a button whose visible label means "accept".
+    try {
+      // Typed through `globalThis` rather than `document`: this callback is
+      // serialised into the browser, so the DOM lib is not in scope on the Node
+      // side that compiles it — the same reason `dwell` reaches scrollBy that way.
+      type Clickable = { innerText?: string; textContent?: string | null; click(): void };
+      type Dom = {
+        document: { querySelectorAll(sel: string): ArrayLike<Clickable> };
+      };
+
+      const clicked = await p.evaluate((pattern: string) => {
+        const re = new RegExp(pattern, "i");
+        const doc = (globalThis as unknown as Dom).document;
+        const nodes = doc.querySelectorAll(
+          "button, a[role='button'], [role='button'], input[type='button'], input[type='submit']"
+        );
+        for (let i = 0; i < nodes.length; i++) {
+          const node = nodes[i];
+          if (!node) continue;
+          const label = (node.innerText || node.textContent || "").trim();
+          if (label && re.test(label)) {
+            node.click();
+            return true;
+          }
+        }
+        return false;
+      }, CONSENT_TEXT.source);
+      if (clicked) await wait(400);
+      return clicked;
+    } catch {
+      return false;
+    }
+  }
+
+  /** One ordinary visit: land, accept the banner, look at it briefly. */
+  async function visitSite(p: Page, url: string): Promise<void> {
+    try {
+      await p.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+      await wait(700 + (now() % 900));
+      await acceptCookies(p);
+      await dwell(p);
+    } catch {
+      // A slow or dead site is not a reason to abandon the run.
+    }
+  }
+
+  /**
+   * Gives a fresh profile some history before the first search.
+   *
+   * Once per browser, not per query: whatever benefit exists comes from the
+   * profile having a past, and paying for it forty times over would just be
+   * forty times the wall clock.
+   */
+  async function warmProfile(p: Page): Promise<void> {
+    const sites = (
+      process.env.SERP_WARMUP_SITES?.split(",")
+        .map((x) => x.trim())
+        .filter(Boolean) ?? WARMUP_SITES
+    ).slice(0, WARMUP_COUNT);
+    if (!sites.length) return;
+
+    opts.onWarmup?.({ sites: sites.length });
+    for (const site of sites) await visitSite(p, site);
+    // The next query has to re-land on the search homepage.
+    landed = false;
+  }
+
+  /**
    * Types the query into the search box instead of loading /search?q= directly.
    *
    * A cold hit on a deep results URL, with no referrer and no prior visit to the
@@ -238,6 +405,41 @@ export function createSerpDriver(opts: SerpDriverOptions) {
     } catch {
       landed = false;
       return false;
+    }
+  }
+
+  /**
+   * A moment of looking at the page before scraping it.
+   *
+   * Two mouse moves, a scroll, a short pause. Requested, cheap, and honestly
+   * described: a 403 is refused at the *request* level, before a page exists, so
+   * this cannot help with a block already in force. Where it plausibly helps is
+   * the other direction — interaction telemetry on pages that do load feeds the
+   * reputation that decides later requests.
+   *
+   * So: low confidence and unmeasurable, which is why it is three seconds and not
+   * thirty, and why it sits beside the note saying the stealth work stops here.
+   */
+  async function dwell(p: Page): Promise<void> {
+    try {
+      // `globalThis` rather than `window`: this callback is serialised into the
+      // browser, so the DOM lib is not in scope on the Node side that compiles it.
+      const scroll = (y: number) =>
+        p.evaluate(
+          (dy: number) =>
+            (globalThis as unknown as { scrollBy(x: number, y: number): void }).scrollBy(0, dy),
+          y
+        );
+
+      await p.mouse.move(220 + (now() % 180), 260 + (now() % 140));
+      await wait(400 + (now() % 500));
+      await scroll(320 + (now() % 240));
+      await wait(600 + (now() % 700));
+      await p.mouse.move(420 + (now() % 200), 520 + (now() % 160));
+      await scroll(260);
+      await wait(500 + (now() % 600));
+    } catch {
+      // A page that navigated or closed under us is not a failure of the run.
     }
   }
 
@@ -280,6 +482,20 @@ export function createSerpDriver(opts: SerpDriverOptions) {
     lastQueryAt = now();
     queries++;
 
+    // An unrelated visit every few queries, so the session is not forty
+    // consecutive searches and nothing else.
+    if (DECOY_EVERY > 0 && queries > 1 && queries % DECOY_EVERY === 0 && !headless) {
+      const pool =
+        process.env.SERP_WARMUP_SITES?.split(",")
+          .map((x) => x.trim())
+          .filter(Boolean) ?? WARMUP_SITES;
+      const pick = pool[queries % pool.length];
+      if (pick) {
+        await visitSite(p, pick);
+        landed = false;
+      }
+    }
+
     // `res` is null when the query was typed: there is no response object, so
     // the URL and the body are all there is to judge by.
     const typed = await typeQuery(p, query);
@@ -305,6 +521,8 @@ export function createSerpDriver(opts: SerpDriverOptions) {
       if (outcome !== "solved") return parsed;
       return after.status === "ok" ? after : await reissue(p, query);
     }
+
+    await dwell(p);
 
     // The final URL is the only other unambiguous block signal: a redirect to
     // /sorry/ or to the consent host IS the block, whereas the body of a

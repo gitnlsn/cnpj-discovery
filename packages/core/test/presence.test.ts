@@ -8,7 +8,11 @@ import {
   matchStrength,
   stripRegistryNumbers,
 } from "../src/domain/nameMatch";
-import { classifyHit, isUsefulKind, looksLikeRegistryMirror } from "../src/domain/searchNoise";
+import {
+  classifyHit,
+  isStorableKind,
+  looksLikeRegistryMirror,
+} from "../src/domain/searchNoise";
 import {
   findPresence,
   verifyHits,
@@ -92,17 +96,21 @@ test("classifyHit separates mirrors, socials and real sites", () => {
   assert.equal(classifyHit("https://cnpj.biz/68464469000115"), "aggregator");
   assert.equal(classifyHit("https://www.casadosdados.com.br/x"), "aggregator");
   assert.equal(classifyHit("https://jusbrasil.com.br/processos/1"), "legal");
-  assert.equal(classifyHit("https://br.linkedin.com/in/maria"), "resume");
+  assert.equal(classifyHit("https://br.linkedin.com/in/maria"), "linkedin");
   assert.equal(classifyHit("https://instagram.com/cursinho"), "social");
   assert.equal(classifyHit("https://cursinhomaria.com.br"), "site");
   assert.equal(classifyHit("nonsense"), "unknown");
 });
 
-test("only social and site count as evidence", () => {
-  assert.equal(isUsefulKind("social"), true);
-  assert.equal(isUsefulKind("site"), true);
-  assert.equal(isUsefulKind("aggregator"), false);
-  assert.equal(isUsefulKind("legal"), false);
+test("social, site and linkedin are stored; the rest are not", () => {
+  assert.equal(isStorableKind("social"), true);
+  assert.equal(isStorableKind("site"), true);
+  // Stored is not the same as counted: a LinkedIn profile is kept so the cohort
+  // is measurable, and only earns its way to the model via its headline.
+  assert.equal(isStorableKind("linkedin"), true);
+  assert.equal(isStorableKind("aggregator"), false);
+  assert.equal(isStorableKind("legal"), false);
+  assert.equal(isStorableKind("resume"), false);
 });
 
 // ---------------------------------------------------------------- verifying

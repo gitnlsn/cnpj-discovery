@@ -10,7 +10,17 @@ import ts from "typescript-eslint";
  */
 export default ts.config(
   {
-    ignores: ["**/node_modules/**", "**/.next/**", "data/**", "gmaps-whatsapp-extractor/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/.next/**",
+      "data/**",
+      "gmaps-whatsapp-extractor/**",
+      // A real Chrome profile: 147 MB of somebody else's bundled JavaScript,
+      // which eslint will happily report 568 problems in.
+      "**/.serp-profile/**",
+      // Saved search-results pages, kept byte-for-byte as the engines served them.
+      "**/test/fixtures/**",
+    ],
   },
   js.configs.recommended,
   ...ts.configs.recommended,

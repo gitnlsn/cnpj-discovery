@@ -178,8 +178,16 @@ export const searchHits = sqliteTable(
     url: text("url").notNull(),
     title: text("title"),
     description: text("description"),
-    /** classifyHit's answer: "social" | "site". Others are never stored. */
+    /** classifyHit's answer: "social" | "site" | "linkedin". Others are not stored. */
     kind: text("kind"),
+    /**
+     * For a LinkedIn profile: what the person says they do.
+     *
+     * Stored because it is a fact we derived, not a verdict we reached — whether
+     * it counts as evidence is decided at read time, so the rule can improve
+     * without a backfill. See `domain/linkedin.ts`.
+     */
+    headline: text("headline"),
     /** Which field carried the name, so a run can be audited afterwards. */
     matchedOn: text("matched_on"),
     checkedAt: text("checked_at").notNull().default(now),
