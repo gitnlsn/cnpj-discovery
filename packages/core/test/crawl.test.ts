@@ -9,8 +9,8 @@ import {
   crawlSite,
   HostThrottle,
   mapLimit,
-  describeFetchError,
 } from "../src/usecases/crawl";
+import { describeFetchError } from "../src/domain/netError";
 import type { HttpPort } from "../src/ports/index";
 
 /** A fetch stub. No network in tests, and no mock that agrees with the code. */

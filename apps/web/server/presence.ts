@@ -34,11 +34,41 @@ export interface PresenceStats {
   improved: string[];
 }
 
-export async function searchPresence(
-  db: Db,
-  targets: PresenceTarget[],
-  jobCtx: JobContext
-): Promise<PresenceStats> {
+/**
+ * Why one company was not searched, when it was not.
+ *
+ * `stop` reasons end the whole run; `skip` reasons are about this company only.
+ * They are separated because the continuous loop has to know whether to move on
+ * or to give up, and a caller that conflated them would either quit on one
+ * refusal or hammer a blocked engine to the end of the list.
+ */
+export type PresenceStop = "cancelled" | "daily-cap" | "blocked-streak";
+
+export interface PresenceRun {
+  /**
+   * Searches one company. Returns the reason the run must end, or null to go on.
+   *
+   * Whether the company gained evidence is in `stats.improved`, not here: the
+   * caller re-scores from that list, and "found something" and "found something
+   * that counts" are different facts — see the `counted` filter below.
+   */
+  searchOne(target: PresenceTarget): Promise<PresenceStop | null>;
+  stats: PresenceStats;
+  close(): Promise<void>;
+}
+
+/**
+ * Opens a search run and keeps the engine chain open across companies.
+ *
+ * Split out of `searchPresence` for the continuous loop, which handles one
+ * company at a time and would otherwise pay the Chrome profile warm-up — the
+ * one the log calls "uma vez por rodada, não por empresa" — on every single
+ * company. Batch callers get the same behaviour through `searchPresence`, which
+ * is now this plus a for-loop.
+ *
+ * Returns null when SERP is switched off, exactly as `serpFor` does.
+ */
+export function openPresenceRun(db: Db, jobCtx: JobContext): PresenceRun | null {
   const stats: PresenceStats = {
     found: 0,
     none: 0,
@@ -66,17 +96,18 @@ export async function searchPresence(
           : `CAPTCHA não resolvido (${outcome}) após ${Math.round(waitedMs / 1000)}s.`
       ),
   });
-  if (!chain) return stats;
+  if (!chain) return null;
 
   const streak = new BlockStreak(3);
-  let done = 0;
 
-  try {
-    for (const target of targets) {
-      if (jobCtx.cancelled()) break;
+  return {
+    stats,
+    close: () => chain.close(),
+    async searchOne(target: PresenceTarget): Promise<PresenceStop | null> {
+      if (jobCtx.cancelled()) return "cancelled";
       if ((await remainingToday(db)) <= 0) {
         jobCtx.log("teto diário de buscas atingido; parei aqui.");
-        break;
+        return "daily-cap";
       }
 
       const outcome = await findPresence(target, chain.providers, {
@@ -169,20 +200,45 @@ export async function searchPresence(
             `passa sozinho — mas só se ninguém ficar batendo na porta, então travei a busca por ` +
             `um tempo.`
         );
-        break;
+        return "blocked-streak";
       }
 
+      return null;
+    },
+  };
+}
+
+/**
+ * The whole batch: open a run, search every target, close.
+ *
+ * The two buttons that search a selection use this. `continuous.ts` drives
+ * `openPresenceRun` directly instead, because it interleaves one search with a
+ * crawl and a score and cannot hand over the whole list up front.
+ */
+export async function searchPresence(
+  db: Db,
+  targets: PresenceTarget[],
+  jobCtx: JobContext
+): Promise<PresenceStats> {
+  const run = openPresenceRun(db, jobCtx);
+  if (!run) {
+    return { found: 0, none: 0, blocked: 0, unverifiable: 0, improved: [] };
+  }
+  try {
+    let done = 0;
+    for (const target of targets) {
+      if (await run.searchOne(target)) break;
+      const { found, none, blocked } = run.stats;
       jobCtx.progress({
         done: ++done,
         total: targets.length,
-        note: `${stats.found} com presença · ${stats.none} sem nada · ${stats.blocked} bloqueadas`,
+        note: `${found} com presença · ${none} sem nada · ${blocked} bloqueadas`,
       });
     }
   } finally {
-    await chain.close();
+    await run.close();
   }
-
-  return stats;
+  return run.stats;
 }
 
 /**

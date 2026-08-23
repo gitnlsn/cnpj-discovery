@@ -60,6 +60,36 @@ export function assertDataset(): void {
   }
 }
 
+/** Thrown when the Parquet on disk was built by an older layout. */
+export class DatasetStaleError extends Error {
+  constructor(missing: string[]) {
+    super(
+      `A base da Receita foi gerada por uma versão anterior do layout e não tem ` +
+        `${missing.join(", ")}. Reconverta a partir dos ZIPs que já estão em disco:\n\n` +
+        `  pnpm data:sync --fresh --parts 0,1\n\n` +
+        `Nada é baixado de novo — um arquivo cujo tamanho já bate é pulado.`
+    );
+    this.name = "DatasetStaleError";
+  }
+}
+
+/**
+ * Refuses a dataset that predates a column this code reads.
+ *
+ * Loudly, on purpose. The alternative — selecting the column only when it
+ * happens to exist — would hand back a null address for every company and make
+ * "the base is old" indistinguishable from "this company has no address". That
+ * is the one confusion this project spends the most effort avoiding.
+ */
+async function assertEstabSchema(conn: DuckDBConnection): Promise<void> {
+  const reader = await conn.runAndReadAll(`SELECT * FROM estabelecimentos LIMIT 0`);
+  const present = new Set(reader.columnNames());
+  const missing = ["tipo_logradouro", "logradouro", "numero", "complemento"].filter(
+    (c) => !present.has(c)
+  );
+  if (missing.length) throw new DatasetStaleError(missing);
+}
+
 async function open(): Promise<DuckDBConnection> {
   const instance = await DuckDBInstance.create(":memory:");
   const conn = await instance.connect();
@@ -77,6 +107,7 @@ async function open(): Promise<DuckDBConnection> {
         hive_types = {'cnae_div': 'VARCHAR'}
       );
   `);
+  await assertEstabSchema(conn);
   if (existsSync(paths.empresas())) {
     await conn.run(`
       CREATE OR REPLACE VIEW empresas AS

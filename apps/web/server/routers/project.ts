@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { projects, scores, companies, cnaePicks } from "@cnpj/db";
 import {
   compileTargeting,
@@ -208,6 +208,77 @@ export const projectRouter = router({
     }
 
     return { spec, model, resumed: Boolean(kept) };
+  }),
+
+  /**
+   * What each chosen CNAE actually returned, once its companies were judged.
+   *
+   * `cnae_picks` already says how many companies a CNAE *reaches*; this says how
+   * many were worth having. The two are not related: measured on this database,
+   * "Condomínios prediais" produced 14 hot leads from 63 companies while
+   * "Gestão e administração da propriedade imobiliária" produced 2 from 137 —
+   * fifteen times the hit rate, and nothing on screen said so.
+   *
+   * That gap is where the cost goes. A CNAE the rubric rejects as wrong line of
+   * business still costs a crawl and a model call per company, one at a time,
+   * for as long as nobody notices the pattern. Reading it back per CNAE turns a
+   * per-company disappointment into a targeting decision.
+   */
+  cnaeYield: publicProcedure.input(z.object({ id: slug })).query(async ({ ctx, input }) => {
+    const rows = await ctx.db
+      .select({
+        cnae: companies.cnae,
+        descricao: companies.cnaeDescricao,
+        tier: scores.tier,
+        wrongType: scores.wrongType,
+        error: scores.error,
+        scored: scores.cnpj,
+      })
+      .from(companies)
+      .leftJoin(
+        scores,
+        and(eq(scores.cnpj, companies.cnpj), eq(scores.projectId, companies.projectId))
+      )
+      .where(eq(companies.projectId, input.id));
+
+    const by = new Map<
+      string,
+      {
+        cnae: string;
+        descricao: string | null;
+        added: number;
+        judged: number;
+        wrongType: number;
+        hot: number;
+        warm: number;
+      }
+    >();
+    for (const r of rows) {
+      const e = by.get(r.cnae) ?? {
+        cnae: r.cnae,
+        descricao: r.descricao,
+        added: 0,
+        judged: 0,
+        wrongType: 0,
+        hot: 0,
+        warm: 0,
+      };
+      e.added++;
+      // A row with an `error` is a failed call, not a verdict — counting it as
+      // judged would blame the CNAE for the provider being down.
+      if (r.scored && !r.error) {
+        e.judged++;
+        if (r.wrongType) e.wrongType++;
+        if (r.tier === "hot") e.hot++;
+        if (r.tier === "warm") e.warm++;
+      }
+      by.set(r.cnae, e);
+    }
+
+    // Worst first: the screen exists to surface the CNAE to stop spending on.
+    return [...by.values()].sort(
+      (a, b) => b.wrongType / (b.judged || 1) - a.wrongType / (a.judged || 1)
+    );
   }),
 
   stats: publicProcedure.input(z.object({ id: slug })).query(async ({ ctx, input }) => {

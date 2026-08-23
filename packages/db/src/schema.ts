@@ -90,6 +90,18 @@ export const companies = sqliteTable(
     uf: text("uf"),
     municipio: text("municipio"),
     bairro: text("bairro"),
+    /**
+     * The street, as four columns rather than one formatted line.
+     *
+     * Stored raw for the same reason the phone is: formatting is a view, and a
+     * view that has been flattened into storage cannot be corrected without a
+     * re-sync. `formatAddress` composes them at read time.
+     */
+    tipoLogradouro: text("tipo_logradouro"),
+    logradouro: text("logradouro"),
+    numero: text("numero"),
+    complemento: text("complemento"),
+    cep: text("cep"),
     dataInicioAtividade: text("data_inicio_atividade"),
     porte: text("porte"),
     capitalSocial: real("capital_social"),

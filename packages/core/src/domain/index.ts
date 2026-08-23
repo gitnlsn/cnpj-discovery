@@ -11,3 +11,5 @@ export * from "./spec";
 export * from "./prompt";
 export * from "./csv";
 export * from "./mail";
+export * from "./address";
+export * from "./netError";

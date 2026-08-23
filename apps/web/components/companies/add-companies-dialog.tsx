@@ -79,13 +79,19 @@ export function AddCompaniesDialog({
   // are 71% of the rows and almost none has a website, so a run that includes
   // them comes back nearly all `cannot_determine`.
   const [mei, setMei] = useState("nao");
-  // "com site" means websiteFromEmail would return a URL — the filter and the
-  // crawler now agree exactly, so this is a real "we have somewhere to visit".
-  const [site, setSite] = useState("com");
+  // Was "com" — a hard requirement of an own-domain e-mail, because that guess
+  // was the only route to a page to read. It is no longer: the continuous run
+  // searches the web for a company with no readable site, so requiring the
+  // e-mail now selects on registration hygiene rather than on fit. Still
+  // offered, because with SERP switched off the old reasoning holds.
+  const [site, setSite] = useState("");
   const [porte, setPorte] = useState("");
   const [matrizOnly, setMatrizOnly] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  // Whether anything will look for a company that has no site to guess.
+  const serp = useQuery(trpc.enrichment.serpStatus.queryOptions());
 
   const picks = useQuery({
     ...trpc.discovery.picks.queryOptions({ projectId }),
@@ -263,7 +269,9 @@ export function AddCompaniesDialog({
                 hint={
                   site === "com"
                     ? "o site sai do domínio do e-mail — é o que dá o que visitar"
-                    : "sem site não há o que ler, e a empresa fica sem nota"
+                    : serp.data?.enabled
+                      ? "sem e-mail de domínio próprio, a busca na web procura a empresa"
+                      : "sem site não há o que ler, e a empresa fica sem nota"
                 }
                 className="col-span-2"
               >
@@ -316,13 +324,13 @@ export function AddCompaniesDialog({
               </div>
             </div>
 
-            {site !== "com" && (
+            {site !== "com" && !serp.data?.enabled && (
               <Alert className="mx-6 mb-3 w-auto">
                 <TriangleAlert className="size-4" />
                 <AlertDescription>
-                  Sem o filtro de site, a maior parte destas empresas não tem página para ler —
-                  elas entram no projeto e ficam sem nota. Se quiser mesmo assim, use o Places
-                  depois para procurar um site (cota paga).
+                  A busca na web está desligada, então para estas empresas não há nada para ler
+                  — elas entram no projeto e ficam sem nota. Ligue o SERP no <code>.env</code>,
+                  ou use o Places depois para procurar um site (cota paga).
                 </AlertDescription>
               </Alert>
             )}

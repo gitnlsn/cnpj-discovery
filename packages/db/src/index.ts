@@ -14,6 +14,7 @@ export { migrate } from "./migrate";
  */
 declare global {
   var __cnpjDb: BetterSQLite3Database<typeof schema> | undefined;
+  var __cnpjSqlite: Database.Database | undefined;
 }
 
 /**
@@ -43,8 +44,23 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
+  globalThis.__cnpjSqlite = sqlite;
   globalThis.__cnpjDb = drizzle(sqlite, { schema });
   return globalThis.__cnpjDb;
+}
+
+/**
+ * The better-sqlite3 handle behind `getDb`, for bulk work in `scripts/`.
+ *
+ * Drizzle is the right tool for the app's one-row-at-a-time writes and the
+ * wrong one for a backfill that touches every row: that would be one prepared
+ * statement per company instead of one for the whole run. Scripts also cannot
+ * import `drizzle-orm` directly — it is a dependency of this package, not of
+ * the workspace root — so this is the supported way in.
+ */
+export function getSqlite(): Database.Database {
+  getDb();
+  return globalThis.__cnpjSqlite!;
 }
 
 export type Db = ReturnType<typeof getDb>;

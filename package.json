@@ -14,6 +14,7 @@
     "data:sync": "tsx --env-file-if-exists=.env scripts/sync-rf.ts",
     "data:query": "tsx --env-file-if-exists=.env scripts/query.ts",
     "db:migrate": "pnpm --filter @cnpj/db migrate",
+    "db:backfill-address": "tsx --env-file-if-exists=.env scripts/backfill-address.ts",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "eslint .",

@@ -36,6 +36,46 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  * empresas" would hide the hallucination behind a plausible zero, which is
  * exactly how a fabricated segment survives review.
  */
+/**
+ * What a CNAE returned, or an em dash when nothing from it has been judged yet.
+ *
+ * The dash is load-bearing, the same way it is everywhere else here: a CNAE
+ * nobody has processed and a CNAE that produced nothing are opposite facts, and
+ * showing "0%" for the first would condemn a code that was never tried.
+ */
+function CnaeYield({
+  row,
+}: {
+  row?: { judged: number; wrongType: number; hot: number; warm: number };
+}) {
+  if (!row?.judged) return <span className="text-muted-foreground">—</span>;
+  const wrongPct = Math.round((100 * row.wrongType) / row.judged);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help">
+          <span
+            className={
+              wrongPct >= 50
+                ? "text-destructive"
+                : wrongPct >= 25
+                  ? "text-muted-foreground"
+                  : ""
+            }
+          >
+            {wrongPct}% ramo errado
+          </span>
+          {row.hot > 0 && <span className="ml-1.5 font-medium">· {row.hot} quente</span>}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {row.judged} julgadas · {row.wrongType} de outro ramo · {row.hot} quentes · {row.warm}{" "}
+        mornas
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 const STATUS: Record<
   string,
   { label: string; variant: "secondary" | "outline" | "destructive" }
@@ -49,6 +89,15 @@ export function CnaeTable({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
+
+  /**
+   * What each CNAE returned once its companies were judged.
+   *
+   * Shown beside reach because the two answer different questions and only
+   * together are they a decision: reach is how many companies a code offers,
+   * yield is how many of the ones already tried were worth having.
+   */
+  const yields = useQuery(trpc.project.cnaeYield.queryOptions({ id: projectId }));
 
   const picks = useQuery(trpc.discovery.picks.queryOptions({ projectId }));
   const invalidate = () =>
@@ -134,6 +183,21 @@ export function CnaeTable({ projectId }: { projectId: string }) {
                   <TableHead className="w-24 text-right">empresas</TableHead>
                   <TableHead className="w-24 text-right">com tel.</TableHead>
                   <TableHead className="w-24 text-right">24 meses</TableHead>
+                  <TableHead className="w-28 text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help underline decoration-dotted underline-offset-2">
+                          rendeu
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm">
+                        Das empresas deste CNAE que já foram julgadas: quantas o modelo aprovou
+                        como sendo do ramo, e quantas viraram lead quente. Uma taxa de ramo
+                        errado alta significa que o CNAE traz o tipo errado de empresa — cada
+                        uma custa um crawl e uma chamada ao modelo antes de ser descartada.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -180,6 +244,9 @@ export function CnaeTable({ projectId }: { projectId: string }) {
                       </TableCell>
                       <TableCell className="tabular text-right text-muted-foreground">
                         {nf(p.reachRecent)}
+                      </TableCell>
+                      <TableCell className="tabular text-right">
+                        <CnaeYield row={yields.data?.find((y) => y.cnae === p.cnae)} />
                       </TableCell>
                     </TableRow>
                   );

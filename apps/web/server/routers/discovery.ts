@@ -11,6 +11,7 @@ import {
 } from "@cnpj/data";
 import { router, publicProcedure, notFound } from "../trpc";
 import { requireLlm } from "../../lib/llm";
+import { toCompanyRow } from "../company-row";
 
 /**
  * `.strict()` on purpose.
@@ -286,27 +287,7 @@ export const discoveryRouter = router({
 
       await ctx.db
         .insert(companies)
-        .values(
-          rows.map((c) => ({
-            projectId: input.projectId,
-            cnpj: c.cnpj,
-            razaoSocial: c.razaoSocial,
-            nomeFantasia: c.nomeFantasia,
-            cnae: c.cnae,
-            cnaeDescricao: c.cnaeDescricao,
-            uf: c.uf,
-            municipio: c.municipio,
-            bairro: c.bairro,
-            dataInicioAtividade: c.dataInicioAtividade,
-            porte: c.porte,
-            capitalSocial: c.capitalSocial,
-            naturezaJuridica: c.naturezaJuridica,
-            mei: c.mei,
-            simples: c.simples,
-            email: c.email,
-            sourcePeriod: input.sourcePeriod ?? null,
-          }))
-        )
+        .values(rows.map((c) => toCompanyRow(c, input.projectId, input.sourcePeriod)))
         .onConflictDoNothing();
 
       return { added: rows.length };

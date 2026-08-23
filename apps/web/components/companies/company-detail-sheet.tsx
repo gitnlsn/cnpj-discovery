@@ -191,8 +191,26 @@ export function CompanyDetailSheet({
                     <span className="font-mono text-xs">{c.cnae}</span>
                     {c.cnaeDescricao && <span className="ml-2">{c.cnaeDescricao}</span>}
                   </Field>
+                  <Field label="Endereço">
+                    {c.endereco ? (
+                      <>
+                        <span>{c.endereco.linha}</span>
+                        <a
+                          href={c.endereco.maps}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-2 text-xs underline underline-offset-2 hover:no-underline"
+                        >
+                          ver no mapa
+                        </a>
+                      </>
+                    ) : (
+                      DASH
+                    )}
+                  </Field>
                   <Field label="Local">
                     {[c.bairro, c.municipio, c.uf].filter(Boolean).join(" · ") || DASH}
+                    {c.cep && <span className="ml-2 font-mono text-xs">{c.cep}</span>}
                   </Field>
                   <Field label="Aberta em">
                     <span className="font-mono text-xs">{c.dataInicioAtividade ?? "—"}</span>

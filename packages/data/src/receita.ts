@@ -7,6 +7,8 @@ import {
   INSTITUTIONAL,
   ACCOUNTANT,
   ACCOUNTANT_WORD,
+  deriveAddress,
+  type DerivedAddress,
 } from "@cnpj/core/domain";
 import { query } from "./duck";
 
@@ -57,6 +59,16 @@ export interface CompanyFilters {
   naturezaPrefix?: string[];
   minCapitalSocial?: number;
   /**
+   * CEP prefixes — the territory filter the address columns exist for.
+   *
+   * A Brazilian CEP narrows geographically from the left: "01" is central São
+   * Paulo, "013" narrows further, "01310" is one stretch of Avenida Paulista.
+   * Any length works, so the same field serves "this region" and "this street".
+   */
+  cepPrefix?: string[];
+  /** Substring match on the neighbourhood, for a within-city territory. */
+  bairro?: string;
+  /**
    * CNPJs to leave out — the ones already in the project.
    *
    * Without it the "add" list keeps offering companies that are already there,
@@ -76,6 +88,14 @@ export interface Company {
   uf: string;
   municipio: string | null;
   bairro: string | null;
+  /** The four street columns, verbatim as the Receita writes them. */
+  tipoLogradouro: string | null;
+  logradouro: string | null;
+  numero: string | null;
+  complemento: string | null;
+  cep: string | null;
+  /** Derived on read, never stored — same arrangement as `phone`. */
+  endereco: DerivedAddress | null;
   dataInicioAtividade: string | null;
   porte: string | null;
   capitalSocial: number | null;
@@ -205,6 +225,20 @@ function where(f: CompanyFilters, params: unknown[]): string {
     params.push(f.minCapitalSocial);
     parts.push(`emp.capital_social >= ?`);
   }
+  if (f.cepPrefix?.length) {
+    // Digits only on both sides: 3,2% of rows hold a CEP that is not eight
+    // digits, and the operator may well type "01310-100".
+    const clean = `regexp_replace(e.cep, '[^0-9]', '', 'g')`;
+    parts.push(
+      `(${f.cepPrefix
+        .map((c) => (params.push(`${c.replace(/\D/g, "")}%`), `${clean} LIKE ?`))
+        .join(" OR ")})`
+    );
+  }
+  if (f.bairro) {
+    params.push(`%${f.bairro.toLowerCase()}%`);
+    parts.push(`lower(strip_accents(e.bairro)) LIKE lower(strip_accents(?))`);
+  }
 
   return parts.length ? `WHERE ${parts.join("\n    AND ")}` : "";
 }
@@ -225,6 +259,7 @@ const FROM = `
 
 const SELECT_COLUMNS = `
       e.cnpj, e.nome_fantasia, e.cnae_principal, e.uf, e.bairro,
+      e.tipo_logradouro, e.logradouro, e.numero, e.complemento, e.cep,
       e.data_inicio_atividade, e.ddd, e.telefone, e.email,
       emp.razao_social, emp.porte, emp.capital_social, emp.natureza_juridica,
       coalesce(s.mei, false)     AS mei,
@@ -245,6 +280,16 @@ function toCompany(r: Record<string, unknown>): Company {
   // the pre-2016 eight-digit format first; without that, ~70% of the mobiles in
   // this base read as landlines.
   const classified = ddd && tel ? classifyReceitaPhone(ddd, tel) : null;
+  const raw = {
+    tipoLogradouro: r.tipo_logradouro as string | null,
+    logradouro: r.logradouro as string | null,
+    numero: r.numero as string | null,
+    complemento: r.complemento as string | null,
+    bairro: r.bairro as string | null,
+    municipio: r.municipio as string | null,
+    uf: r.uf as string | null,
+    cep: r.cep as string | null,
+  };
   return {
     cnpj: String(r.cnpj),
     razaoSocial: (r.razao_social as string) ?? null,
@@ -254,6 +299,12 @@ function toCompany(r: Record<string, unknown>): Company {
     uf: String(r.uf),
     municipio: (r.municipio as string) ?? null,
     bairro: (r.bairro as string) ?? null,
+    tipoLogradouro: (r.tipo_logradouro as string) ?? null,
+    logradouro: (r.logradouro as string) ?? null,
+    numero: (r.numero as string) ?? null,
+    complemento: (r.complemento as string) ?? null,
+    cep: (r.cep as string) ?? null,
+    endereco: deriveAddress(raw),
     dataInicioAtividade: isoDate(r.data_inicio_atividade),
     porte: (r.porte as string) ?? null,
     capitalSocial: r.capital_social == null ? null : Number(r.capital_social),

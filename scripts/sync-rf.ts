@@ -7,6 +7,19 @@
  *   pnpm data:sync                           # part 0 — where the recent companies are
  *   pnpm data:sync --parts 0,1,2,3,4,5,6,7,8,9
  *   pnpm data:sync --dry-run                 # sizes only, downloads nothing
+ *   pnpm data:sync --fresh --offline --parts 0,1   # rebuild from the ZIPs on disk
+ *
+ * `--fresh` empties the Parquet directories before writing. Two reasons to need
+ * it: the establishments converter APPENDs, so re-running without it doubles
+ * every row; and a column added to the layout changes the file schema, which
+ * DuckDB refuses to read alongside the old one. A download whose size already
+ * matches is skipped, so rebuilding after a layout change costs conversion time
+ * and no bandwidth.
+ *
+ * `--offline` goes further and never touches the network: the period is read
+ * from the downloads directory and the ZIPs are taken as they are. That skips
+ * the size check that normally catches a truncated download, so it is opt-in
+ * rather than something the script decides for you.
  *
  * The ten Estabelecimentos parts are NOT a uniform split. Part 0 is ~6x the
  * size of the others and holds the recent registrations: measured on 2026-08,
@@ -14,7 +27,7 @@
  * while all of part 1 stops in May 2021. Anything sorted newest-first needs
  * part 0; parts 1-9 are the historical tail.
  */
-import { mkdir, stat, readdir } from "node:fs/promises";
+import { mkdir, stat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { scratchConnection, paths, dataRoot } from "../packages/data/src/duck";
 import {
@@ -38,6 +51,8 @@ interface Args {
   only?: string[];
   dryRun: boolean;
   keepZips: boolean;
+  fresh: boolean;
+  offline: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -58,10 +73,36 @@ function parseArgs(argv: string[]): Args {
       .map((s) => s.trim()),
     dryRun: argv.includes("--dry-run"),
     keepZips: argv.includes("--keep-zips"),
+    fresh: argv.includes("--fresh"),
+    offline: argv.includes("--offline"),
   };
 }
 
 const wants = (args: Args, name: string) => !args.only || args.only.includes(name);
+
+/** The newest YYYY-MM directory under data/downloads. Used only by --offline. */
+async function localPeriod(): Promise<string> {
+  const entries = await readdir(paths.downloads(), { withFileTypes: true }).catch(() => []);
+  const months = entries
+    .filter((e) => e.isDirectory() && /^\d{4}-\d{2}$/.test(e.name))
+    .map((e) => e.name)
+    .sort();
+  if (!months.length) {
+    throw new Error(`Nenhuma pasta YYYY-MM em ${paths.downloads()}. Passe --period.`);
+  }
+  return months.at(-1)!;
+}
+
+/** The ZIPs already in the period directory, by name and size on disk. */
+async function localSizes(dir: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (e.isFile() && e.name.toLowerCase().endsWith(".zip")) {
+      out.set(e.name, (await stat(join(dir, e.name))).size);
+    }
+  }
+  return out;
+}
 
 async function dirSize(path: string): Promise<number> {
   let total = 0;
@@ -84,9 +125,52 @@ function progressLine(label: string, text: string): void {
   process.stdout.write(`\r  ${label} ${text}`.padEnd(78).slice(0, 78));
 }
 
+/**
+ * How many establishments actually resolve to a razão social.
+ *
+ * `Empresas` and `Estabelecimentos` are both split into ten parts, and it is
+ * natural to assume part N of one pairs with part N of the other. It does not:
+ * measured on parts 0 and 1 of 2026-08, 13,1 million establishments joined
+ * against 33,5 million companies and only 60% found a name.
+ *
+ * Worth a line of output because the gap is otherwise invisible and expensive.
+ * A missing razão social is a blank column for a normal company — but for a MEI
+ * it is the owner's civil name, which is the only thing the web search has to
+ * look for, so those companies cannot be enriched at all.
+ */
+async function reportRazaoCoverage(conn: Awaited<ReturnType<typeof scratchConnection>>) {
+  const estab = join(paths.estabelecimentos(), "**", "*.parquet");
+  const emp = join(paths.empresas(), "*.parquet");
+  try {
+    const reader = await conn.runAndReadAll(`
+      SELECT count(*) AS total, count(emp.razao_social) AS com_razao
+      FROM read_parquet('${estab}', hive_partitioning = true) e
+      LEFT JOIN read_parquet('${emp}') emp ON emp.cnpj_basico = e.cnpj_basico
+    `);
+    const [row] = reader.getRowObjects() as { total: bigint; com_razao: bigint }[];
+    if (!row) return;
+    const total = Number(row.total);
+    const named = Number(row.com_razao);
+    if (!total) return;
+    const pct = (100 * named) / total;
+    console.log(
+      `\nRazão social: ${named.toLocaleString("pt-BR")} de ${total.toLocaleString("pt-BR")} (${pct.toFixed(1)}%)`
+    );
+    if (pct < 95) {
+      console.log(
+        `  As partes de Empresas NÃO pareiam com as de Estabelecimentos — baixar\n` +
+          `  Empresas0..9 é o que fecha essa conta. Sem razão social um MEI não tem\n` +
+          `  nome para procurar na web, porque a razão social dele é o nome do dono.`
+      );
+    }
+  } catch {
+    // A partial run (--only empresas) may have no establishments to measure.
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const period = args.period ?? (await latestPeriod());
+  const period = args.period ?? (args.offline ? await localPeriod() : await latestPeriod());
   const base = periodUrl(period).replace(/\/$/, "");
   const dl = join(paths.downloads(), period);
   await mkdir(dl, { recursive: true });
@@ -105,13 +189,17 @@ async function main(): Promise<void> {
 
   // Always price the download before starting it. Socios is never in this list:
   // it is 2.3 GB of CPF data with no use here.
-  const available = await listPeriod(period);
+  const available = args.offline ? await localSizes(dl) : await listPeriod(period);
   const missing = files.filter((f) => !available.has(f));
   if (missing.length) {
-    throw new Error(`Não existem em ${period}: ${missing.join(", ")}`);
+    throw new Error(
+      args.offline
+        ? `Não estão em ${dl}: ${missing.join(", ")}. Rode sem --offline para baixar.`
+        : `Não existem em ${period}: ${missing.join(", ")}`
+    );
   }
   let planned = 0;
-  console.log("Vou baixar:");
+  console.log(args.offline ? "Vou reconverter (nada será baixado):" : "Vou baixar:");
   for (const f of files) {
     const size = available.get(f)!;
     planned += size;
@@ -123,12 +211,25 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.fresh) {
+    // Only what this run is about to rewrite. Wiping `simples` or the reference
+    // tables during an `--only estabelecimentos` run would leave the dataset
+    // half-built with no way to tell.
+    const targets: string[] = [];
+    if (wants(args, "estabelecimentos")) targets.push(paths.estabelecimentos());
+    if (wants(args, "empresas")) targets.push(paths.empresas());
+    for (const dir of targets) await rm(dir, { recursive: true, force: true });
+    console.log(`--fresh: apaguei ${targets.length} diretório(s) antes de reconverter.\n`);
+  }
+
   const conn = await scratchConnection();
   const t0 = Date.now();
   const totals: Record<string, FilterStats> = {};
 
   const fetchOne = async (name: string): Promise<string> => {
     const dest = join(dl, name);
+    // Already verified present by the listing above.
+    if (args.offline) return dest;
     await download(`${base}/${name}`, dest, (got, total) =>
       progressLine(name, `${fmtBytes(got)} / ${fmtBytes(total)}`)
     );
@@ -225,6 +326,8 @@ async function main(): Promise<void> {
   if (args.parts.length < 10) {
     console.log(`\n  Parcial: partes ${args.parts.join(",")} de 0-9.`);
   }
+
+  await reportRazaoCoverage(conn);
   if (!args.keepZips) {
     console.log(
       `\n  Os ZIPs continuam em ${dl} (apague à vontade; --keep-zips é o padrão hoje).`

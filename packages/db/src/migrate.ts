@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS companies (
   uf                    TEXT,
   municipio             TEXT,
   bairro                TEXT,
+  tipo_logradouro       TEXT,
+  logradouro            TEXT,
+  numero                TEXT,
+  complemento           TEXT,
+  cep                   TEXT,
   data_inicio_atividade TEXT,
   porte                 TEXT,
   capital_social        REAL,
@@ -266,6 +271,11 @@ function upgradeCrawlUrlSource(sqlite: Database.Database): void {
 const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: "projects", column: "spec_draft", type: "TEXT" },
   { table: "search_hits", column: "headline", type: "TEXT" },
+  { table: "companies", column: "tipo_logradouro", type: "TEXT" },
+  { table: "companies", column: "logradouro", type: "TEXT" },
+  { table: "companies", column: "numero", type: "TEXT" },
+  { table: "companies", column: "complemento", type: "TEXT" },
+  { table: "companies", column: "cep", type: "TEXT" },
 ];
 
 function addMissingColumns(sqlite: Database.Database): void {

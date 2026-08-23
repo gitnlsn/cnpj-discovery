@@ -4,6 +4,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { describeFetchError, isDnsFailure } from "@cnpj/core/domain";
 
 /**
  * The Receita Federal publishes the monthly bulk files through a public
@@ -13,8 +14,57 @@ import { pipeline } from "node:stream/promises";
  * The CDN mirror some tools use (dados-abertos-rf-cnpj.casadosdados.com.br)
  * serves the identical bytes but lags a month, so it is only a fallback.
  */
-export const RF_DAV_ROOT =
+const RF_DAV_DEFAULT =
   "https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/";
+
+/**
+ * Where the bulk files are fetched from, overridable with `RF_DAV_ROOT`.
+ *
+ * An override exists because this host has disappeared before: the share is a
+ * Nextcloud instance on a subdomain the Receita controls, and when that
+ * subdomain stops resolving there is nothing wrong with the code and no way to
+ * carry on without editing it. Whatever is set has to speak the same WebDAV
+ * PROPFIND, and must end in a slash.
+ */
+export const RF_DAV_ROOT = (process.env.RF_DAV_ROOT || RF_DAV_DEFAULT).replace(
+  /\/*$/,
+  "/"
+);
+
+/**
+ * A network failure with its reason named, and the host it happened to.
+ *
+ * `fetch` says only "fetch failed" — the same string whether the domain has
+ * ceased to exist or a certificate expired. The crawler learned to look in
+ * `cause` long ago; the sync had not, so a dead host looked like a bug in the
+ * script.
+ */
+export class MirrorUnreachableError extends Error {
+  readonly dns: boolean;
+  constructor(url: string, cause: unknown) {
+    const host = (() => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return url;
+      }
+    })();
+    const why = describeFetchError(cause, 0);
+    const dns = isDnsFailure(cause);
+    super(
+      `Não consegui falar com ${host}: ${why}.` +
+        (dns
+          ? `\n\n  O host não resolve. Isso não é problema do seu código nem da sua rede —` +
+            `\n  o compartilhamento da Receita já mudou de endereço antes.` +
+            `\n\n  · para reconverter o que já está em disco:  pnpm data:sync --fresh --offline` +
+            `\n  · para apontar para outro espelho:           RF_DAV_ROOT=https://… pnpm data:sync`
+          : "")
+    );
+    this.name = "MirrorUnreachableError";
+    this.dns = dns;
+    this.cause = cause;
+  }
+}
 
 const UA = "cnpj-discovery/0.1";
 
@@ -32,10 +82,15 @@ function parsePropfind(xml: string): { name: string; size: number | null }[] {
 }
 
 async function propfind(url: string): Promise<{ name: string; size: number | null }[]> {
-  const res = await fetch(url, {
-    method: "PROPFIND",
-    headers: { Depth: "1", "User-Agent": UA },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "PROPFIND",
+      headers: { Depth: "1", "User-Agent": UA },
+    });
+  } catch (err) {
+    throw new MirrorUnreachableError(url, err);
+  }
   if (!res.ok && res.status !== 207) {
     throw new Error(`PROPFIND ${url} falhou (${res.status})`);
   }
@@ -85,7 +140,12 @@ async function fileSize(path: string): Promise<number | undefined> {
 }
 
 export async function remoteSize(url: string): Promise<number> {
-  const head = await fetch(url, { method: "HEAD", headers: { "User-Agent": UA } });
+  let head: Response;
+  try {
+    head = await fetch(url, { method: "HEAD", headers: { "User-Agent": UA } });
+  } catch (err) {
+    throw new MirrorUnreachableError(url, err);
+  }
   if (!head.ok) throw new Error(`HEAD ${url} falhou (${head.status})`);
   return Number(head.headers.get("content-length") ?? 0);
 }
@@ -117,7 +177,12 @@ export async function download(
     received = existing;
   }
 
-  const res = await fetch(url, { headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { headers });
+  } catch (err) {
+    throw new MirrorUnreachableError(url, err);
+  }
   if (!res.ok && res.status !== 206) throw new Error(`GET ${url} falhou (${res.status})`);
   if (!res.body) throw new Error(`GET ${url} não devolveu corpo`);
 

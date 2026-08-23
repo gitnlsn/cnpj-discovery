@@ -16,6 +16,11 @@ import {
 } from "../rf-layout";
 import { streamZipLines } from "./mirror";
 
+/** Trims and squeezes the space runs the fixed-width source leaves behind. */
+function collapse(v: string | undefined): string {
+  return (v ?? "").replace(/\s+/g, " ").trim();
+}
+
 export interface FilterStats {
   read: number;
   kept: number;
@@ -71,6 +76,10 @@ const ESTAB_COLUMNS = [
   "data_inicio_atividade",
   "uf",
   "municipio_rf",
+  "tipo_logradouro",
+  "logradouro",
+  "numero",
+  "complemento",
   "bairro",
   "cep",
   "ddd",
@@ -115,6 +124,13 @@ export async function convertEstabelecimentos(
         rfDate(f[ESTAB.DATA_INICIO]),
         (f[ESTAB.UF] ?? "").trim(),
         (f[ESTAB.MUNICIPIO] ?? "").trim(),
+        // The street columns come out of a fixed-width system: 15,6% of
+        // non-empty complementos carry a run of spaces. Squeezed here, once,
+        // rather than in every reader.
+        collapse(f[ESTAB.TIPO_LOGRADOURO]),
+        collapse(f[ESTAB.LOGRADOURO]),
+        collapse(f[ESTAB.NUMERO]),
+        collapse(f[ESTAB.COMPLEMENTO]),
         (f[ESTAB.BAIRRO] ?? "").trim(),
         (f[ESTAB.CEP] ?? "").trim(),
         ddd,
@@ -136,6 +152,10 @@ export async function convertEstabelecimentos(
         try_cast(data_inicio_atividade AS DATE) AS data_inicio_atividade,
         uf,
         nullif(municipio_rf, '')           AS municipio_rf,
+        nullif(tipo_logradouro, '')        AS tipo_logradouro,
+        nullif(logradouro, '')             AS logradouro,
+        nullif(numero, '')                 AS numero,
+        nullif(complemento, '')            AS complemento,
         nullif(bairro, '')                 AS bairro,
         nullif(cep, '')                    AS cep,
         nullif(ddd, '')                    AS ddd,

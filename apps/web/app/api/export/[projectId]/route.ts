@@ -1,6 +1,6 @@
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 import { getDb, leads, companies, scores, crawls, contacts } from "@cnpj/db";
-import { formatCsvForExcel } from "@cnpj/core";
+import { formatCsvForExcel, formatAddress, formatCep } from "@cnpj/core";
 
 /**
  * The companies list as a CSV.
@@ -23,6 +23,11 @@ const HEADER = [
   "municipio",
   "uf",
   "bairro",
+  "endereco",
+  "logradouro",
+  "numero",
+  "complemento",
+  "cep",
   "data_inicio_atividade",
   "porte",
   "mei",
@@ -137,6 +142,13 @@ export async function GET(
       c.municipio ?? "",
       c.uf ?? "",
       c.bairro ?? "",
+      // The composed line first, because that is the one a person pastes into
+      // Maps; the raw columns after it, for a mail merge that needs the parts.
+      formatAddress(c) ?? "",
+      c.logradouro ?? "",
+      c.numero ?? "",
+      c.complemento ?? "",
+      formatCep(c.cep) ?? "",
       c.dataInicioAtividade ?? "",
       c.porte ?? "",
       c.mei ? "sim" : "nao",

@@ -13,6 +13,7 @@ import { websiteFromEmail, type SiteSignals } from "@cnpj/core";
 import { router, publicProcedure } from "../trpc";
 import { runPipeline } from "../pipeline";
 import { runContinuous } from "../continuous";
+import { withAddress } from "../company-row";
 
 /**
  * One query behind the companies view.
@@ -159,7 +160,7 @@ export const companiesRouter = router({
       return {
         total: filtered.length,
         rows: page.map((r) => ({
-          company: r.companies,
+          company: withAddress(r.companies),
           crawl: r.crawls
             ? { ...r.crawls, signals: r.crawls.signals as SiteSignals | null }
             : null,

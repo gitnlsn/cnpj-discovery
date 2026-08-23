@@ -26,6 +26,8 @@ import {
   hasReadableContent,
   loadPresence,
 } from "./candidate";
+import { toCompanyRow } from "./company-row";
+import { openPresenceRun, type PresenceRun } from "./presence";
 
 /**
  * Takes one company at a time from the base and runs it all the way through,
@@ -109,7 +111,20 @@ export async function runContinuous(
     let noSite = 0;
     let transientWaits = 0;
     let hardFailures = 0;
+    let searched = 0;
+    let rescued = 0;
     let stopped = "você mandou parar";
+    /**
+     * The web-search chain, opened on the first company that needs it.
+     *
+     * Lazy because a run whose companies all have readable sites should never
+     * pay the Chrome warm-up, and held open afterwards because that warm-up is
+     * per round, not per company. Set back to null when the engine stops
+     * answering: crawling and scoring still work without it, so a blocked
+     * search must not end the run.
+     */
+    let presenceRun: PresenceRun | null = null;
+    let presenceOff = false;
 
     ctx.log(
       `contínuo iniciado · ${await remainingToday(db)} de ${dailyLimit()} requisições restantes hoje`
@@ -135,25 +150,7 @@ export async function runContinuous(
 
       await db
         .insert(companies)
-        .values({
-          projectId: input.projectId,
-          cnpj: next.cnpj,
-          razaoSocial: next.razaoSocial,
-          nomeFantasia: next.nomeFantasia,
-          cnae: next.cnae,
-          cnaeDescricao: next.cnaeDescricao,
-          uf: next.uf,
-          municipio: next.municipio,
-          bairro: next.bairro,
-          dataInicioAtividade: next.dataInicioAtividade,
-          porte: next.porte,
-          capitalSocial: next.capitalSocial,
-          naturezaJuridica: next.naturezaJuridica,
-          mei: next.mei,
-          simples: next.simples,
-          email: next.email,
-          sourcePeriod: input.sourcePeriod ?? null,
-        })
+        .values(toCompanyRow(next, input.projectId, input.sourcePeriod))
         .onConflictDoNothing();
 
       const url = websiteFromEmail(next.email);
@@ -201,7 +198,53 @@ export async function runContinuous(
 
       const readable = hasReadableContent(signals);
 
-      if (!spec || !readable) {
+      /**
+       * Nothing readable on a site — so look for the company on the web.
+       *
+       * This is the step the loop used to skip. Without it the only route to a
+       * website was guessing the domain from an own-domain e-mail, which meant
+       * every company that never registered one came back `cannot_determine`
+       * however good a prospect it was. The search was already written and
+       * already wired to the two manual buttons; it just never ran here.
+       */
+      let presence = (await loadPresence(db, [next.cnpj])).get(next.cnpj);
+      if (!readable && !presence && spec && !presenceOff) {
+        presenceRun ??= openPresenceRun(db, ctx);
+        if (!presenceRun) {
+          // No SERP configured. Said once, then never retried.
+          presenceOff = true;
+        } else {
+          const stop = await presenceRun.searchOne({
+            cnpj: next.cnpj,
+            razaoSocial: next.razaoSocial,
+            nomeFantasia: next.nomeFantasia,
+            municipio: next.municipio,
+            uf: next.uf,
+          });
+          // "cancelled" and "daily-cap" are refusals to start; "blocked-streak"
+          // comes after a query was actually spent. Counting all three as a
+          // search would report work that never happened.
+          if (stop !== "cancelled" && stop !== "daily-cap") searched++;
+
+          // Read before the run is discarded below. Only evidence that counts —
+          // `improved` applies the same LinkedIn test the batch path uses, so a
+          // bare namesake profile does not buy a model call here either.
+          if (presenceRun.stats.improved.includes(next.cnpj)) {
+            presence = (await loadPresence(db, [next.cnpj])).get(next.cnpj);
+            if (presence) rescued++;
+          }
+
+          if (stop) {
+            // Crawling and scoring still work, so the run continues without it.
+            ctx.log(`busca na web desligada pelo resto da rodada (${stop}).`);
+            await presenceRun.close();
+            presenceRun = null;
+            presenceOff = true;
+          }
+        }
+      }
+
+      if (!spec || (!readable && !presence)) {
         // No page read means no evidence; the rubric can only answer
         // "cannot_determine", so the request is not spent.
         noSite++;
@@ -237,12 +280,13 @@ export async function runContinuous(
         // an impression is the sheet's job, not this loop's.
         const candidate: ScoreCandidate = toScoreCandidate(
           next,
-          siteFromSignals(signals!),
+          // Null when the company got here on web presence alone — no e-mail to
+          // guess a domain from, or a site that would not load. `null` is the
+          // honest value: the rubric reads it as "no page", which is true, and
+          // scores from the search evidence instead.
+          signals ? siteFromSignals(signals) : null,
           null,
-          // Normally empty: this loop scores a company it just pulled from the
-          // base. It is populated when the search stage ran over this CNPJ in
-          // an earlier session, and there is no reason to throw that away.
-          (await loadPresence(db, [next.cnpj])).get(next.cnpj)
+          presence
         );
 
         const [result] = await scoreCompanies(llmPort(), spec, [candidate], {
@@ -318,8 +362,12 @@ export async function runContinuous(
       });
     }
 
+    await presenceRun?.close();
+
     ctx.log(
-      `parou: ${stopped} · ${done} empresas processadas · ${scored} pontuadas · ${noSite} sem site`
+      `parou: ${stopped} · ${done} empresas processadas · ${scored} pontuadas · ` +
+        `${noSite} sem evidência` +
+        (searched ? ` · ${searched} buscadas na web, ${rescued} com presença encontrada` : "")
     );
   });
 

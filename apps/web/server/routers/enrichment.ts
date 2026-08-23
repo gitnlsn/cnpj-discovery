@@ -560,6 +560,18 @@ export const enrichmentRouter = router({
     }),
 
   /**
+   * Whether the web search is configured, and how much of today's cap is left.
+   *
+   * Project-independent and cheap, unlike `meiPending`, because the screens that
+   * need it are asking a question about the installation and not about a
+   * project: "if I pull in a company with no site, will anything look for it?".
+   */
+  serpStatus: publicProcedure.query(async ({ ctx }) => ({
+    enabled: serpEnabled(),
+    remaining: serpEnabled() ? await serpRemainingToday(ctx.db) : 0,
+  })),
+
+  /**
    * Search the web for the stuck MEIs, then re-score whatever that rescued.
    *
    * Both stages in one job because the database allows exactly one job at a
