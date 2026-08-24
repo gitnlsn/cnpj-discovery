@@ -262,6 +262,91 @@ export function isNonResult(url: string): boolean {
 }
 
 /**
+ * Hosts that are never the business you were looking for.
+ *
+ * A separate list from `AGGREGATORS`, and the difference is what each one means
+ * rather than tidiness. An aggregator is a mirror of the Receita, so for the
+ * open-internet sweep it is *evidence* — it carries the CNPJ (see
+ * `domain/cnpj.ts`). These are not evidence of anything: they are the page you
+ * land on when you search for a kind of business instead of for a company by
+ * name.
+ *
+ * Which is why this list did not exist before. Every search this project ran was
+ * anchored to a company's own name, and a marketplace listing rarely leads with
+ * somebody's full civil name. Searching "padaria artesanal São Paulo" fills page
+ * one with exactly these instead.
+ *
+ * Permanently incomplete by design, like `AGGREGATORS`. Top it up from what real
+ * sweeps surface rather than from imagination.
+ */
+export const NON_BUSINESS = [
+  // Marketplaces e classificados: a página é de um anúncio, não do negócio.
+  "mercadolivre.com.br",
+  "mercadolibre.com",
+  "olx.com.br",
+  "enjoei.com.br",
+  "elo7.com.br",
+  "shopee.com.br",
+  "amazon.com.br",
+  "magazineluiza.com.br",
+  "americanas.com.br",
+  "casasbahia.com.br",
+  "ifood.com.br",
+  "rappi.com.br",
+  "aiqfome.com",
+  "getninjas.com.br",
+  "gethelp.com.br",
+  "airbnb.com.br",
+  "booking.com",
+  "despegar.com.br",
+  // Imprensa: cita o negócio, não é o negócio.
+  "g1.globo.com",
+  "globo.com",
+  "uol.com.br",
+  "folha.uol.com.br",
+  "terra.com.br",
+  "estadao.com.br",
+  "r7.com",
+  "band.uol.com.br",
+  "metropoles.com",
+  "cnnbrasil.com.br",
+  "infomoney.com.br",
+  "exame.com",
+  // Enciclopédia, avaliação, mapa: sobre o negócio, e de terceiros.
+  "wikipedia.org",
+  "wikiwand.com",
+  "reclameaqui.com.br",
+  "tripadvisor.com.br",
+  "tripadvisor.com",
+  "yelp.com",
+  "foursquare.com",
+  "waze.com",
+  // Portais institucionais e de entidade de classe.
+  "sebrae.com.br",
+  "cnc.org.br",
+  "fiesp.com.br",
+  "senai.br",
+  "sesc.com.br",
+  "abras.com.br",
+  "portaldofranchising.com.br",
+  "abf.com.br",
+];
+
+/**
+ * Is this host one that can never be the business itself?
+ *
+ * Kept out of `classifyHit` on purpose: that function answers "what kind of page
+ * is this" for both search paths, and on the presence path a marketplace listing
+ * that leads with somebody's full name is a weak but real signal that the person
+ * exists. Here it is only noise. So the sweep applies this gate on top rather
+ * than changing what `classifyHit` means for everybody.
+ */
+export function isNonBusinessHost(url: string): boolean {
+  const host = hostOf(url);
+  return !host || matches(host, NON_BUSINESS);
+}
+
+/**
  * Does this result read like a Receita mirror, whatever its domain?
  *
  * The host blocklist above is necessary and permanently incomplete. The sector

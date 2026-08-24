@@ -197,6 +197,9 @@ export const projectRouter = router({
             reachTotal: c.total,
             reachWithPhone: c.withPhone,
             reachRecent: c.recent,
+            reachSecundaria: c.secundaria,
+            reachSecundariaWithPhone: c.secundariaWithPhone,
+            reachSecundariaRecent: c.secundariaRecent,
             rationale: "escolhido ao compilar o perfil — confira a descrição oficial",
             suggestedBy: "llm" as const,
             // Never pre-chosen: an unverified code must not silently define

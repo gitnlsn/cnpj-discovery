@@ -246,3 +246,17 @@ test("search-engine chrome never becomes a result", () => {
   // that reads as unrecognized rather than a result.
   assert.notEqual(parseDuckDuckGo(html).status, "ok");
 });
+
+/**
+ * O desafio real do DuckDuckGo, capturado em 2026-08-23 deste IP.
+ *
+ * Vale como fixture porque é o caso em que errar custa mais: se isto voltasse
+ * como "empty", uma rodada bloqueada gravaria "não tem presença na web" para
+ * cada empresa que passasse por ela — o único desfecho que corrompe os dados em
+ * silêncio, porque toda linha parece um negativo legítimo.
+ */
+test("a página de desafio do DDG é bloqueio, não vazio", () => {
+  const page = parseDuckDuckGo(fixture("ddg-challenge.html"));
+  assert.equal(page.status, "blocked");
+  if (page.status === "blocked") assert.match(page.reason, /bloqueou/);
+});

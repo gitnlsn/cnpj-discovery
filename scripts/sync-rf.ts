@@ -8,6 +8,19 @@
  *   pnpm data:sync --parts 0,1,2,3,4,5,6,7,8,9
  *   pnpm data:sync --dry-run                 # sizes only, downloads nothing
  *   pnpm data:sync --fresh --offline --parts 0,1   # rebuild from the ZIPs on disk
+ *   pnpm data:sync --drop-intermediates      # delete empresas/simples when done
+ *
+ * Establishments are DENORMALISED: razão social, natureza jurídica, capital,
+ * porte, simples and MEI are written into each row instead of joined at query
+ * time. So `empresas` and `simples` are converted first and completely, and the
+ * establishments conversion joins against them. They are inputs, not query
+ * tables — nothing reads them after the sync, and `--drop-intermediates` removes
+ * them. Converting establishments against an incomplete `empresas` bakes a
+ * missing razão social into the files, which is why the run ends by measuring the
+ * coverage and complaining below 95%.
+ *
+ * Establishments with no e-mail are dropped. The Receita publishes no website
+ * column, so the registered domain is the only thing a crawl can aim at.
  *
  * `--fresh` empties the Parquet directories before writing. Two reasons to need
  * it: the establishments converter APPENDs, so re-running without it doubles
@@ -53,6 +66,7 @@ interface Args {
   keepZips: boolean;
   fresh: boolean;
   offline: boolean;
+  dropIntermediates: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -75,6 +89,7 @@ function parseArgs(argv: string[]): Args {
     keepZips: argv.includes("--keep-zips"),
     fresh: argv.includes("--fresh"),
     offline: argv.includes("--offline"),
+    dropIntermediates: argv.includes("--drop-intermediates"),
   };
 }
 
@@ -104,6 +119,13 @@ async function localSizes(dir: string): Promise<Map<string, number>> {
   return out;
 }
 
+/** Bytes of a single file, 0 if it is not there. */
+async function fileSize(path: string): Promise<number> {
+  return await stat(path)
+    .then((st) => st.size)
+    .catch(() => 0);
+}
+
 async function dirSize(path: string): Promise<number> {
   let total = 0;
   const walk = async (p: string): Promise<void> => {
@@ -126,45 +148,54 @@ function progressLine(label: string, text: string): void {
 }
 
 /**
- * How many establishments actually resolve to a razão social.
+ * How many establishments actually carry a razão social.
  *
  * `Empresas` and `Estabelecimentos` are both split into ten parts, and it is
  * natural to assume part N of one pairs with part N of the other. It does not:
  * measured on parts 0 and 1 of 2026-08, 13,1 million establishments joined
  * against 33,5 million companies and only 60% found a name.
  *
- * Worth a line of output because the gap is otherwise invisible and expensive.
+ * This used to be a LEFT JOIN measured after the fact. Now the name is written
+ * into the establishments row, so a gap here is not a column that fills itself in
+ * when more Empresas parts arrive — it is baked into the Parquet until the next
+ * `--fresh`. That makes the warning below more important than it was, not less.
+ *
  * A missing razão social is a blank column for a normal company — but for a MEI
  * it is the owner's civil name, which is the only thing the web search has to
  * look for, so those companies cannot be enriched at all.
  */
-async function reportRazaoCoverage(conn: Awaited<ReturnType<typeof scratchConnection>>) {
+async function reportRazaoCoverage(
+  conn: Awaited<ReturnType<typeof scratchConnection>>
+): Promise<number | null> {
   const estab = join(paths.estabelecimentos(), "**", "*.parquet");
-  const emp = join(paths.empresas(), "*.parquet");
   try {
     const reader = await conn.runAndReadAll(`
-      SELECT count(*) AS total, count(emp.razao_social) AS com_razao
-      FROM read_parquet('${estab}', hive_partitioning = true) e
-      LEFT JOIN read_parquet('${emp}') emp ON emp.cnpj_basico = e.cnpj_basico
+      SELECT count(*) AS total, count(razao_social) AS com_razao
+      FROM read_parquet('${estab}', hive_partitioning = true)
     `);
     const [row] = reader.getRowObjects() as { total: bigint; com_razao: bigint }[];
-    if (!row) return;
+    if (!row) return null;
     const total = Number(row.total);
     const named = Number(row.com_razao);
-    if (!total) return;
+    if (!total) return null;
     const pct = (100 * named) / total;
     console.log(
       `\nRazão social: ${named.toLocaleString("pt-BR")} de ${total.toLocaleString("pt-BR")} (${pct.toFixed(1)}%)`
     );
     if (pct < 95) {
       console.log(
-        `  As partes de Empresas NÃO pareiam com as de Estabelecimentos — baixar\n` +
-          `  Empresas0..9 é o que fecha essa conta. Sem razão social um MEI não tem\n` +
-          `  nome para procurar na web, porque a razão social dele é o nome do dono.`
+        `  As partes de Empresas NÃO pareiam com as de Estabelecimentos, e agora a\n` +
+          `  razão social é gravada dentro de cada linha: essa lacuna só sai com um\n` +
+          `  --fresh depois de converter Empresas0..9. Sem razão social um MEI não tem\n` +
+          `  nome para procurar na web, porque a razão social dele é o nome do dono.\n\n` +
+          `    pnpm data:sync --only empresas --parts 0,1,2,3,4,5,6,7,8,9\n` +
+          `    pnpm data:sync --only estabelecimentos --fresh --offline`
       );
     }
+    return pct;
   } catch {
     // A partial run (--only empresas) may have no establishments to measure.
+    return null;
   }
 }
 
@@ -257,21 +288,12 @@ async function main(): Promise<void> {
     console.log("  referências prontas (cnaes, municípios)\n");
   }
 
+  // Order matters now. Establishments carry razão social, porte, capital,
+  // natureza, simples and MEI in the row, so their conversion joins against the
+  // finished `empresas` and `simples` Parquet — which therefore have to exist,
+  // complete, first. Downloads may still interleave; only the conversion is
+  // ordered.
   for (const p of args.parts) {
-    if (wants(args, "estabelecimentos")) {
-      const name = `Estabelecimentos${p}.zip`;
-      const zip = await fetchOne(name);
-      const s = await convertEstabelecimentos(
-        conn,
-        zip,
-        join(dl, `t-estab-${p}.csv`),
-        paths.estabelecimentos(),
-        `p${p}`,
-        tick(name)
-      );
-      process.stdout.write("\n");
-      totals[name] = s;
-    }
     if (wants(args, "empresas")) {
       const name = `Empresas${p}.zip`;
       const zip = await fetchOne(name);
@@ -301,6 +323,24 @@ async function main(): Promise<void> {
     totals["Simples.zip"] = s;
   }
 
+  for (const p of args.parts) {
+    if (wants(args, "estabelecimentos")) {
+      const name = `Estabelecimentos${p}.zip`;
+      const zip = await fetchOne(name);
+      const s = await convertEstabelecimentos(
+        conn,
+        zip,
+        join(dl, `t-estab-${p}.csv`),
+        paths.estabelecimentos(),
+        `p${p}`,
+        { empresasDir: paths.empresas(), simplesFile: paths.simples() },
+        tick(name)
+      );
+      process.stdout.write("\n");
+      totals[name] = s;
+    }
+  }
+
   // The numbers that decide whether this approach is viable at national scale.
   const estabBytes = await dirSize(paths.estabelecimentos());
   const empBytes = await dirSize(paths.empresas());
@@ -317,17 +357,69 @@ async function main(): Promise<void> {
           ? ` · ${((s.withPhone / (s.kept || 1)) * 100).toFixed(1)}% com telefone`
           : "")
     );
+    // The secondary-CNAE line is what answers "was that column worth the
+    // reconversion". It gets its own line because the fields above are listed
+    // one by one rather than iterated, so a new counter is invisible until
+    // somebody prints it.
+    if (s.withCnaeSecundaria) {
+      const pctSec = ((s.withCnaeSecundaria / (s.kept || 1)) * 100).toFixed(1);
+      const avg = (s.cnaeSecundariaCodes / s.withCnaeSecundaria).toFixed(2);
+      console.log(
+        `  ${"".padEnd(26)} ${pctSec.padStart(12)}% com CNAE secundário ` +
+          `(média ${avg} códigos)`
+      );
+    }
   }
+  const simplesBytes = await fileSize(paths.simples());
   console.log("\nParquet em disco:");
   console.log(`  estabelecimentos  ${fmtBytes(estabBytes).padStart(10)}`);
-  console.log(`  empresas          ${fmtBytes(empBytes).padStart(10)}`);
+  console.log(`  empresas          ${fmtBytes(empBytes).padStart(10)}  (intermediário)`);
+  console.log(`  simples           ${fmtBytes(simplesBytes).padStart(10)}  (intermediário)`);
   // No national projection from a subset: the parts are not equal in size, so
   // scaling one of them by ten would be a made-up number.
   if (args.parts.length < 10) {
     console.log(`\n  Parcial: partes ${args.parts.join(",")} de 0-9.`);
   }
 
-  await reportRazaoCoverage(conn);
+  const razaoPct = await reportRazaoCoverage(conn);
+
+  // `empresas` and `simples` are consumed by the establishments conversion and
+  // read by nothing at query time. Deleting them is where the disk saving of the
+  // fold actually lands — but it is opt-in, because a later
+  // `--only estabelecimentos` needs them back (and says so, loudly, instead of
+  // writing nulls).
+  //
+  // Never dropped after a run whose razão social came out short: that is exactly
+  // when the ZIPs have to be reconverted, and deleting the inputs would throw
+  // away both the fix and the evidence of the problem.
+  const intermediates = empBytes + simplesBytes;
+  const razaoOk = razaoPct === null || razaoPct >= 95;
+  if (args.dropIntermediates && !razaoOk) {
+    console.log(
+      `\n  --drop-intermediates recusado: a razão social ficou em ` +
+        `${razaoPct!.toFixed(1)}%.\n` +
+        `  empresas e simples são o que conserta isso, então ficam onde estão.`
+    );
+  } else if (args.dropIntermediates) {
+    if (wants(args, "estabelecimentos")) {
+      await rm(paths.empresas(), { recursive: true, force: true });
+      await rm(paths.simples(), { force: true });
+      console.log(
+        `\n  --drop-intermediates: apaguei empresas e simples (${fmtBytes(intermediates)}).`
+      );
+    } else {
+      console.log(
+        `\n  --drop-intermediates ignorado: esta rodada não converteu estabelecimentos,\n` +
+          `  então apagar empresas/simples deixaria a base sem como ser reconstruída.`
+      );
+    }
+  } else if (intermediates > 0) {
+    console.log(
+      `\n  empresas + simples somam ${fmtBytes(intermediates)} e nenhuma consulta os lê:\n` +
+        `  são entrada da conversão de estabelecimentos. --drop-intermediates apaga.`
+    );
+  }
+
   if (!args.keepZips) {
     console.log(
       `\n  Os ZIPs continuam em ${dl} (apague à vontade; --keep-zips é o padrão hoje).`

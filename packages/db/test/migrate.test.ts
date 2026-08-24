@@ -281,3 +281,137 @@ test("search_hits ganha a coluna headline sem perder as linhas", () => {
   db.close();
   assert.equal(fresh.headline, "Professora de Matemática");
 });
+
+/**
+ * As duas raias, e por que isso é um teste e não um comentário.
+ *
+ * A regra antiga era um job por vez, ponto — e ela bloqueava a única combinação
+ * que alguém realmente quer ao mesmo tempo: varrer a internet aberta procurando
+ * empresas que não estão no projeto enquanto trabalha as que estão. O índice
+ * agora é `(status, lane)`.
+ *
+ * Duas maneiras de isso quebrar em silêncio, as duas cobertas aqui: o índice
+ * antigo sobreviver à migração (e a varredura continuar recusada), ou `lane`
+ * virar NULL (e o índice deixar de bloquear qualquer coisa, porque SQLite trata
+ * NULLs como distintos num índice único).
+ */
+test("as duas raias rodam juntas, e cada uma continua bloqueando a si mesma", () => {
+  const path = tmp();
+  migrate(path);
+  const sqlite = new Database(path);
+  const start = (kind: string, lane: string) =>
+    sqlite
+      .prepare("INSERT INTO jobs (kind, lane, status, progress) VALUES (?, ?, 'running', '{}')")
+      .run(kind, lane);
+
+  start("continuous", "receita");
+  // O pedido: a varredura não espera o processamento das empresas.
+  start("openweb", "openweb");
+  assert.equal(
+    (
+      sqlite.prepare("SELECT count(*) n FROM jobs WHERE status = 'running'").get() as {
+        n: number;
+      }
+    ).n,
+    2
+  );
+
+  // E dentro de cada raia a garantia antiga continua valendo, no banco.
+  assert.throws(() => start("crawl", "receita"), /UNIQUE|constraint/);
+  assert.throws(() => start("openweb", "openweb"), /UNIQUE|constraint/);
+  sqlite.close();
+});
+
+/** Uma base anterior às raias tem de perder o índice global, ou nada muda. */
+test("uma base antiga troca o índice de um-job-só pelo de uma-raia-só", () => {
+  const path = tmp();
+  const sqlite = new Database(path);
+  sqlite.exec(`
+    CREATE TABLE jobs (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT NOT NULL CHECK (kind IN ('compile','crawl','score','continuous','search')),
+      project_id  TEXT,
+      status      TEXT NOT NULL CHECK (status IN ('running','done','failed','cancelled')),
+      progress    TEXT,
+      log         TEXT NOT NULL DEFAULT '',
+      error       TEXT,
+      started_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      finished_at TEXT
+    );
+    CREATE UNIQUE INDEX jobs_one_running_idx ON jobs (status) WHERE status = 'running';
+  `);
+  sqlite.close();
+
+  migrate(path);
+
+  const db = new Database(path);
+  const idx = db
+    .prepare("SELECT sql FROM sqlite_master WHERE name = 'jobs_one_running_idx'")
+    .get() as {
+    sql: string;
+  };
+  assert.match(idx.sql, /lane/, "o índice global sobreviveu e a varredura seguiria bloqueada");
+  const cols = (
+    db.prepare("SELECT name FROM pragma_table_info('jobs')").all() as { name: string }[]
+  ).map((r) => r.name);
+  assert.ok(cols.includes("lane"));
+  // NOT NULL é o que faz o índice bloquear de verdade.
+  const lane = (
+    db.prepare("SELECT * FROM pragma_table_info('jobs')").all() as {
+      name: string;
+      notnull: number;
+    }[]
+  ).find((c) => c.name === "lane");
+  assert.equal(lane?.notnull, 1);
+  db.close();
+});
+
+/**
+ * As tabelas da internet aberta, e os dois CHECKs que impedem uma linha mentirosa.
+ */
+test("as tabelas da internet aberta nascem na base nova", () => {
+  const path = tmp();
+  migrate(path);
+  const db = new Database(path);
+  const names = (
+    db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+  ).map((r) => r.name);
+  for (const t of ["web_queries", "web_leads", "web_lead_scores"]) {
+    assert.ok(names.includes(t), `falta ${t}`);
+  }
+  // Sem coluna de nome: os termos do Google permitem o place_id e nada mais, e
+  // o nome exibido vem do nosso próprio crawl.
+  const cols = (
+    db.prepare("SELECT name FROM pragma_table_info('web_leads')").all() as { name: string }[]
+  ).map((r) => r.name);
+  assert.ok(!cols.includes("name"), "web_leads não pode guardar o nome vindo do Google");
+  assert.ok(!cols.includes("address"), "web_leads não pode guardar o endereço vindo do Google");
+  assert.ok(cols.includes("place_id"));
+  db.close();
+});
+
+test("veredito e CNPJ não podem discordar", () => {
+  const path = tmp();
+  migrate(path);
+  const db = new Database(path);
+  db.prepare("INSERT INTO projects (id, name) VALUES ('p', 'P')").run();
+  const insert = (verdict: string, cnpj: string | null, via: string | null) =>
+    db
+      .prepare(
+        `INSERT INTO web_leads (project_id, apex, website_url, verdict, matched_cnpj, match_via)
+         VALUES ('p', ?, 'https://x', ?, ?, ?)`
+      )
+      .run(`${verdict}-${cnpj}-${via}`, verdict, cnpj, via);
+
+  // "não achamos o CNPJ" com um CNPJ preenchido é uma contradição, e o banco
+  // recusa em vez de deixar a linha existir.
+  assert.throws(() => insert("unmatched", "12345678000199", "address"), /CHECK/);
+  // E o inverso: dizer que está na base sem dizer qual empresa.
+  assert.throws(() => insert("out_of_reach", null, null), /CHECK/);
+  // Um CNPJ sem dizer COMO foi casado não é auditável.
+  assert.throws(() => insert("in_reach", "12345678000199", null), /CHECK/);
+  // As duas formas honestas passam.
+  insert("unmatched", null, null);
+  insert("out_of_reach", "12345678000199", "address");
+  db.close();
+});

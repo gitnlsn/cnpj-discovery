@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { currentJob, recentJobs, getJob, cancelJob, reconcileStaleJobs } from "@cnpj/jobs";
+import {
+  currentJob,
+  runningJobs,
+  recentJobs,
+  getJob,
+  cancelJob,
+  reconcileStaleJobs,
+} from "@cnpj/jobs";
 import { router, publicProcedure } from "../trpc";
 
 /**
@@ -16,7 +23,15 @@ export const jobsRouter = router({
       const cleared = reconcileStaleJobs(ctx.db);
       if (cleared) console.warn(`[jobs] ${cleared} job(s) órfão(s) liberado(s)`);
     }
-    return { current: currentJob(ctx.db), recent: recentJobs(ctx.db, 10) };
+    // `current` keeps meaning "the job on the Receita side", which is what every
+    // component written before lanes assumed. `running` carries both lanes for
+    // the callers that need to show two bars at once.
+    return {
+      current: currentJob(ctx.db),
+      openWeb: currentJob(ctx.db, "openweb"),
+      running: runningJobs(ctx.db),
+      recent: recentJobs(ctx.db, 10),
+    };
   }),
 
   get: publicProcedure

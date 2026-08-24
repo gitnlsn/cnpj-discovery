@@ -196,7 +196,14 @@ export function CompanyTable({
                     )}
                   </div>
                   <div className="truncate font-mono text-[11px] text-muted-foreground">
-                    {c.cnae} · {c.municipio ?? "?"}/{c.uf ?? "?"}
+                    {c.cnae}
+                    {c.cnaeMatch === "secundaria" && (
+                      // A empresa entrou pela atividade secundária, mas o código
+                      // mostrado é o principal dela. Sem esta marca a linha
+                      // parece não casar com o filtro que a trouxe.
+                      <span title="entrou pela atividade secundária"> (2ª)</span>
+                    )}{" "}
+                    · {c.municipio ?? "?"}/{c.uf ?? "?"}
                     {c.dataInicioAtividade ? ` · ${c.dataInicioAtividade}` : ""}
                   </div>
                 </TableCell>

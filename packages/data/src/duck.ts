@@ -65,9 +65,13 @@ export class DatasetStaleError extends Error {
   constructor(missing: string[]) {
     super(
       `A base da Receita foi gerada por uma versão anterior do layout e não tem ` +
-        `${missing.join(", ")}. Reconverta a partir dos ZIPs que já estão em disco:\n\n` +
-        `  pnpm data:sync --fresh --parts 0,1\n\n` +
-        `Nada é baixado de novo — um arquivo cujo tamanho já bate é pulado.`
+        `${missing.join(", ")}. Reconverta:\n\n` +
+        `  pnpm data:sync --only empresas --parts 0,1,2,3,4,5,6,7,8,9\n` +
+        `  pnpm data:sync --only simples\n` +
+        `  pnpm data:sync --only estabelecimentos --fresh --parts 0\n\n` +
+        `Nada é baixado de novo se o tamanho já bater. As partes de Empresas vêm ` +
+        `primeiro e completas de propósito: a razão social agora é gravada dentro ` +
+        `de cada estabelecimento, então o que faltar aqui só sai no próximo --fresh.`
     );
     this.name = "DatasetStaleError";
   }
@@ -84,9 +88,28 @@ export class DatasetStaleError extends Error {
 async function assertEstabSchema(conn: DuckDBConnection): Promise<void> {
   const reader = await conn.runAndReadAll(`SELECT * FROM estabelecimentos LIMIT 0`);
   const present = new Set(reader.columnNames());
-  const missing = ["tipo_logradouro", "logradouro", "numero", "complemento"].filter(
-    (c) => !present.has(c)
-  );
+  const missing = [
+    "tipo_logradouro",
+    "logradouro",
+    "numero",
+    "complemento",
+    // Folded in from `empresas` and `simples` at sync time. Listed here for the
+    // same reason as the address: a base built before the fold would answer a
+    // null razão social for the whole country, and "the base is old" has to stay
+    // distinguishable from "this company has no name".
+    "razao_social",
+    "natureza_juridica",
+    "capital_social",
+    "porte",
+    "simples",
+    "mei",
+    // Same argument again, and the reason it is not optional: a base built
+    // before this column would answer "nenhuma empresa tem CNAE secundário" for
+    // the whole country. That is the "não li" × "não existe" confusion this
+    // project spends the most effort avoiding, and here it would look like a
+    // legitimate answer instead of a missing column.
+    "cnae_secundaria",
+  ].filter((c) => !present.has(c));
   if (missing.length) throw new DatasetStaleError(missing);
 }
 
@@ -108,17 +131,9 @@ async function open(): Promise<DuckDBConnection> {
       );
   `);
   await assertEstabSchema(conn);
-  if (existsSync(paths.empresas())) {
-    await conn.run(`
-      CREATE OR REPLACE VIEW empresas AS
-        SELECT * FROM read_parquet('${join(paths.empresas(), "*.parquet")}');
-    `);
-  }
-  if (existsSync(paths.simples())) {
-    await conn.run(
-      `CREATE OR REPLACE VIEW simples AS SELECT * FROM read_parquet('${paths.simples()}');`
-    );
-  }
+  // No `empresas` or `simples` views: both are folded into every establishments
+  // row by the sync, so there is nothing left to join against. They stay on disk
+  // only as inputs to the next sync, and `--drop-intermediates` removes them.
   if (existsSync(paths.cnaes())) {
     await conn.run(
       `CREATE OR REPLACE VIEW cnaes AS SELECT * FROM read_parquet('${paths.cnaes()}');`
@@ -141,7 +156,16 @@ export function connection(): Promise<DuckDBConnection> {
 /** A one-off connection with no views and no caching — for the sync script. */
 export async function scratchConnection(): Promise<DuckDBConnection> {
   const instance = await DuckDBInstance.create(":memory:");
-  return instance.connect();
+  const conn = await instance.connect();
+  // The establishments conversion hash-joins a part against the whole of
+  // `empresas` — 47 M rows carrying razão social. In an `:memory:` database with
+  // no temp directory that join has nowhere to spill and dies; pointing it at
+  // the data directory is what lets a national sync finish on a laptop.
+  await conn.run(`SET temp_directory = '${join(dataRoot(), "tmp")}'`);
+  // Nothing downstream depends on row order, and holding it costs memory the
+  // join wants.
+  await conn.run(`SET preserve_insertion_order = false`);
+  return conn;
 }
 
 /** Runs a parameterised query and returns plain JS objects. */

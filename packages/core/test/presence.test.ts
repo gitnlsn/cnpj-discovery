@@ -330,6 +330,7 @@ test("verified presence is rendered with its description, and turns on the rules
 
   const out = renderCandidate(
     {
+      id: "68464469000115",
       cnpj: "68464469000115",
       razaoSocial: "MARIA RAQUEL RIBEIRO MARQUES",
       nomeFantasia: null,
@@ -371,6 +372,7 @@ test("a hit with no description says so, instead of implying a business", async 
 
   const out = renderCandidate(
     {
+      id: "1",
       cnpj: "1",
       razaoSocial: "X Y Z",
       nomeFantasia: null,

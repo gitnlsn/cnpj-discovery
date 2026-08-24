@@ -25,6 +25,7 @@ export function toCompanyRow(
     nomeFantasia: c.nomeFantasia,
     cnae: c.cnae,
     cnaeDescricao: c.cnaeDescricao,
+    cnaeMatch: c.cnaeMatch,
     uf: c.uf,
     municipio: c.municipio,
     bairro: c.bairro,

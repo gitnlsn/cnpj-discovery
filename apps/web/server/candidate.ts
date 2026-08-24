@@ -177,6 +177,9 @@ export function toScoreCandidate(
 ): ScoreCandidate {
   const webPresence = presenceFromHits(hits, c.razaoSocial);
   return {
+    // For a Receita company the key IS the CNPJ. The two fields carry the same
+    // value here and diverge only for an open-internet lead, which has no CNPJ.
+    id: c.cnpj,
     cnpj: c.cnpj,
     razaoSocial: c.razaoSocial,
     nomeFantasia: c.nomeFantasia,

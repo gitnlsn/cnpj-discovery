@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { launch, type Browser, type Page } from "puppeteer-core";
+import { type Browser, type Page } from "puppeteer-core";
 import {
   detectWall,
   parseEntityAbout,
@@ -7,6 +7,7 @@ import {
   type LinkedInPageResult,
 } from "@cnpj/core";
 import { profileDir } from "./profile";
+import { launchProfileBrowser, hardenPage } from "./browser";
 
 /**
  * Fetching LinkedIn pages through the signed-in browser.
@@ -132,27 +133,15 @@ export function createLinkedInDriver(opts: LinkedInDriverOptions = {}) {
 
   async function ensurePage(): Promise<Page> {
     if (page && !page.isClosed()) return page;
-    browser ??= await launch({
+    browser ??= await launchProfileBrowser({
       headless,
-      channel: opts.executablePath ? undefined : "chrome",
       executablePath: opts.executablePath,
       // The same profile the SERP driver uses and `pnpm serp:login` signs into.
       // Sharing it is the point: one login serves both.
       userDataDir: opts.userDataDir ?? profileDir(),
-      defaultViewport: null,
-      args: [
-        "--lang=pt-BR",
-        "--disable-blink-features=AutomationControlled",
-        "--no-default-browser-check",
-        "--no-first-run",
-      ],
-      ignoreDefaultArgs: ["--enable-automation"],
     });
     page = await browser.newPage();
-    await page.setExtraHTTPHeaders({ "Accept-Language": "pt-BR,pt;q=0.9" });
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    });
+    await hardenPage(page);
     return page;
   }
 

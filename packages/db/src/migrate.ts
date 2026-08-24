@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS cnae_picks (
   reach_total       INTEGER NOT NULL DEFAULT 0,
   reach_with_phone  INTEGER NOT NULL DEFAULT 0,
   reach_recent      INTEGER NOT NULL DEFAULT 0,
+  reach_secundaria             INTEGER NOT NULL DEFAULT 0,
+  reach_secundaria_with_phone  INTEGER NOT NULL DEFAULT 0,
+  reach_secundaria_recent      INTEGER NOT NULL DEFAULT 0,
   rationale         TEXT,
   suggested_by      TEXT NOT NULL DEFAULT 'llm' CHECK (suggested_by IN ('llm','human')),
   chosen            INTEGER NOT NULL DEFAULT 0,
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS companies (
   nome_fantasia         TEXT,
   cnae                  TEXT NOT NULL,
   cnae_descricao        TEXT,
+  cnae_match            TEXT CHECK (cnae_match IN ('principal','secundaria')),
   uf                    TEXT,
   municipio             TEXT,
   bairro                TEXT,
@@ -115,7 +119,7 @@ CREATE TABLE IF NOT EXISTS crawls (
   final_url     TEXT,
   http_status   INTEGER,
   error         TEXT,
-  url_source    TEXT CHECK (url_source IN ('email','places','manual','search')),
+  url_source    TEXT CHECK (url_source IN ('email','places','manual','search','discovery')),
   signals       TEXT,
   text_excerpt  TEXT,
   pages_fetched INTEGER NOT NULL DEFAULT 0,
@@ -179,7 +183,8 @@ CREATE TABLE IF NOT EXISTS impressions (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline','continuous','search')),
+  kind        TEXT NOT NULL CHECK (kind IN ('compile','discover','crawl','score','places','pipeline','continuous','search','openweb')),
+  lane        TEXT NOT NULL DEFAULT 'receita' CHECK (lane IN ('receita','openweb')),
   project_id  TEXT,
   status      TEXT NOT NULL CHECK (status IN ('running','done','failed','cancelled')),
   progress    TEXT,
@@ -188,10 +193,99 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   finished_at TEXT
 );
--- One job at a time, enforced by the database. Two fast clicks cannot race past
--- a partial unique index the way they can race past a JavaScript guard.
-CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_running_idx ON jobs (status) WHERE status = 'running';
+-- One job at a time PER LANE, enforced by the database. Two fast clicks cannot
+-- race past a partial unique index the way they can race past a JavaScript
+-- guard. Per lane because a sweep of the open internet and the work on a
+-- project's companies touch different tables and different Chrome profiles, so
+-- blocking one on the other bought nothing. Inside a lane the rule is unchanged.
+--
+-- The lane column must stay NOT NULL: SQLite treats NULLs as distinct in a
+-- unique index, so a null lane would silently allow unlimited concurrent jobs.
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_running_idx ON jobs (status, lane) WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS jobs_recent_idx ON jobs (started_at);
+
+-- Que a gente RODOU esta consulta na internet aberta.
+--
+-- Mesmo motivo de search_lookups: sem esta tabela, "esta consulta não achou
+-- nada" e "esta consulta nunca rodou" são a mesma ausência. E a mesma
+-- invariante: uma rodada RECUSADA não escreve linha aqui, porque a linha
+-- afirmaria que olhamos quando fomos recusados.
+CREATE TABLE IF NOT EXISTS web_queries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  job_id     INTEGER,
+  query      TEXT NOT NULL,
+  provider   TEXT NOT NULL,
+  considered INTEGER NOT NULL DEFAULT 0,
+  kept       INTEGER NOT NULL DEFAULT 0,
+  ran_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS web_queries_project_idx ON web_queries (project_id, ran_at);
+
+-- Um negócio achado na internet aberta, com chave no site e não num CNPJ — o
+-- CNPJ é justamente o que estamos tentando descobrir.
+--
+-- NÃO existe coluna de nome, e isso é deliberado: os termos do Google permitem
+-- guardar o place_id e nada mais, então nome e endereço são usados durante a
+-- rodada para achar a empresa na base da Receita e descartados. O que a tela
+-- mostra vem de signals.title — o nosso próprio crawl do site.
+--
+-- "unmatched" significa NÃO ACHAMOS o CNPJ: nunca que a empresa não tem um.
+-- Os CHECKs abaixo são essa regra no banco, para veredito e CNPJ não poderem
+-- discordar.
+CREATE TABLE IF NOT EXISTS web_leads (
+  project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  apex            TEXT NOT NULL,
+  website_url     TEXT NOT NULL,
+  place_id        TEXT,
+  query_id        INTEGER,
+  verdict         TEXT NOT NULL CHECK (verdict IN ('in_reach','out_of_reach','unmatched')),
+  out_of_reach_by TEXT CHECK (out_of_reach_by IN ('cnae','uf','other')),
+  matched_cnpj    TEXT,
+  match_via       TEXT CHECK (match_via IN ('address','mirror','email_domain','crawl_host','manual')),
+  matched_cnae    TEXT,
+  final_url       TEXT,
+  http_status     INTEGER,
+  crawl_error     TEXT,
+  signals         TEXT,
+  text_excerpt    TEXT,
+  pages_fetched   INTEGER NOT NULL DEFAULT 0,
+  emails          TEXT,
+  phones          TEXT,
+  status          TEXT CHECK (status IN ('flagged','contacted','replied','won','lost')),
+  notes           TEXT,
+  crawled_at      TEXT,
+  promoted_at     TEXT,
+  discarded_at    TEXT,
+  found_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (project_id, apex),
+  CHECK ((verdict = 'unmatched') = (matched_cnpj IS NULL)),
+  CHECK ((matched_cnpj IS NULL) = (match_via IS NULL))
+);
+CREATE INDEX IF NOT EXISTS web_leads_verdict_idx ON web_leads (project_id, verdict);
+CREATE INDEX IF NOT EXISTS web_leads_status_idx ON web_leads (project_id, status);
+
+-- A nota de um lead que não tem CNPJ. Tabela própria pelo mesmo motivo que
+-- scores é separada de companies: o modelo reescreve esta linha em cada rodada.
+CREATE TABLE IF NOT EXISTS web_lead_scores (
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  apex           TEXT NOT NULL,
+  fits           TEXT,
+  best_fit       INTEGER,
+  tier           TEXT CHECK (tier IN ('hot','warm','cold')),
+  confidence     TEXT CHECK (confidence IN ('high','medium','low','cannot_determine')),
+  recommendation TEXT,
+  wrong_type     INTEGER NOT NULL DEFAULT 0,
+  hook           TEXT,
+  advice         TEXT,
+  evidence       TEXT,
+  model          TEXT,
+  prompt_sha     TEXT,
+  error          TEXT,
+  scored_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (project_id, apex)
+);
+CREATE INDEX IF NOT EXISTS web_lead_scores_rank_idx ON web_lead_scores (project_id, best_fit);
 
 CREATE TABLE IF NOT EXISTS usage (
   day   TEXT NOT NULL,
@@ -238,12 +332,33 @@ function upgradeJobsKind(sqlite: Database.Database): void {
   // The sentinel must name the NEWEST kind. Checking for an older one is a
   // silent no-op on every database that already has it, and the CHECK then
   // rejects inserts of the new kind at runtime rather than at migration time.
-  if (!row?.sql || row.sql.includes("'search'")) return;
+  if (!row?.sql || row.sql.includes("'openweb'")) return;
   sqlite.exec("DROP TABLE jobs;");
 }
 
 /**
- * `crawls.url_source` gained 'search', and SQLite cannot alter a CHECK.
+ * `jobs_one_running_idx` went from `(status)` to `(status, lane)`.
+ *
+ * `CREATE UNIQUE INDEX IF NOT EXISTS` is a no-op against an index that already
+ * exists under the old definition, so the old one has to be dropped by name
+ * before the DDL can install the new one. Dropping an index loses nothing —
+ * it is derived data — which is why this needs none of the table-rebuild
+ * ceremony below.
+ *
+ * Without this, a database created before lanes keeps the global lock and the
+ * open-internet sweep still refuses to start next to a continuous run, which is
+ * exactly the bug the lane was introduced to fix.
+ */
+function upgradeJobsRunningIndex(sqlite: Database.Database): void {
+  const row = sqlite
+    .prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='jobs_one_running_idx'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("lane")) return;
+  sqlite.exec("DROP INDEX jobs_one_running_idx;");
+}
+
+/**
+ * `crawls.url_source` gained 'search', then 'discovery', and SQLite cannot alter a CHECK.
  *
  * Unlike `jobs`, these rows are worth keeping — a crawl is minutes of network
  * time and the text a score was built from. So this is a real rebuild: create
@@ -255,7 +370,10 @@ function upgradeCrawlUrlSource(sqlite: Database.Database): void {
   const row = sqlite
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='crawls'")
     .get() as { sql?: string } | undefined;
-  if (!row?.sql || row.sql.includes("'search'")) return;
+  // The sentinel must name the NEWEST value. Checking an older one is a silent
+  // no-op on every database that already has it, and the CHECK then rejects the
+  // new value at runtime instead of at migration time.
+  if (!row?.sql || row.sql.includes("'discovery'")) return;
 
   sqlite.exec(`
     BEGIN;
@@ -265,7 +383,7 @@ function upgradeCrawlUrlSource(sqlite: Database.Database): void {
       final_url     TEXT,
       http_status   INTEGER,
       error         TEXT,
-      url_source    TEXT CHECK (url_source IN ('email','places','manual','search')),
+      url_source    TEXT CHECK (url_source IN ('email','places','manual','search','discovery')),
       signals       TEXT,
       text_excerpt  TEXT,
       pages_fetched INTEGER NOT NULL DEFAULT 0,
@@ -299,6 +417,30 @@ const ADDED_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: "companies", column: "numero", type: "TEXT" },
   { table: "companies", column: "complemento", type: "TEXT" },
   { table: "companies", column: "cep", type: "TEXT" },
+  // NOT NULL with a constant default is one of the few things SQLite will add
+  // in place, and it has to be NOT NULL: a null lane would make the partial
+  // unique index treat every running job as distinct.
+  { table: "jobs", column: "lane", type: "TEXT NOT NULL DEFAULT 'receita'" },
+  { table: "cnae_picks", column: "reach_secundaria", type: "INTEGER NOT NULL DEFAULT 0" },
+  {
+    table: "cnae_picks",
+    column: "reach_secundaria_with_phone",
+    type: "INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    table: "cnae_picks",
+    column: "reach_secundaria_recent",
+    type: "INTEGER NOT NULL DEFAULT 0",
+  },
+  // Nullable on purpose: a row added before this column cannot honestly claim
+  // "principal", it can only say that nobody recorded which way it matched.
+  { table: "companies", column: "cnae_match", type: "TEXT" },
+  // For a lead with no CNPJ these are the only way to reach the business: there
+  // is no `contacts` row (that table is keyed by CNPJ) and no Receita phone.
+  { table: "web_leads", column: "emails", type: "TEXT" },
+  { table: "web_leads", column: "phones", type: "TEXT" },
+  { table: "web_leads", column: "status", type: "TEXT" },
+  { table: "web_leads", column: "notes", type: "TEXT" },
 ];
 
 function addMissingColumns(sqlite: Database.Database): void {
@@ -306,7 +448,9 @@ function addMissingColumns(sqlite: Database.Database): void {
     const cols = sqlite.prepare(`SELECT name FROM pragma_table_info(?)`).all(table) as {
       name: string;
     }[];
-    if (!cols.length) continue; // table not created yet — the DDL just made it with the column
+    // Table does not exist yet: the DDL below will create it WITH the column, so
+    // there is nothing to add here.
+    if (!cols.length) continue;
     if (cols.some((c) => c.name === column)) continue;
     sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
   }
@@ -316,9 +460,15 @@ export function migrate(path = dbPath()): void {
   const sqlite = new Database(path);
   sqlite.pragma("journal_mode = WAL");
   upgradeJobsKind(sqlite);
+  upgradeJobsRunningIndex(sqlite);
   upgradeCrawlUrlSource(sqlite);
-  sqlite.exec(DDL);
+  // BEFORE the DDL, not after. The DDL creates indexes, and an index on a column
+  // that `ADDED_COLUMNS` has not added yet fails with "no such column" — which is
+  // how this was discovered. Running it first is correct in both directions: on a
+  // fresh database the table does not exist yet and this is a no-op, and the DDL
+  // then creates it with the column already in place.
   addMissingColumns(sqlite);
+  sqlite.exec(DDL);
   sqlite.close();
 }
 

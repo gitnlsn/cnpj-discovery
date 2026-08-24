@@ -36,7 +36,7 @@ async function persistScore(db: Db, projectId: string, r: ScoreRow): Promise<voi
   };
   await db
     .insert(scores)
-    .values({ projectId, cnpj: r.cnpj, ...row })
+    .values({ projectId, cnpj: r.id, ...row })
     .onConflictDoUpdate({ target: [scores.projectId, scores.cnpj], set: row });
 }
 

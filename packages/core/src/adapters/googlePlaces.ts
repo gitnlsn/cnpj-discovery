@@ -28,6 +28,27 @@ const BASE_URL = "https://places.googleapis.com/v1";
  */
 export const WEBSITE_FIELD_MASK = "places.id,places.websiteUri";
 
+/**
+ * The mask for discovery, where the question is "which businesses are here".
+ *
+ * Three fields more than the lookup mask, and **the same SKU** — the tier billed
+ * is the highest tier requested, `websiteUri` is already Enterprise, and
+ * `displayName`/`formattedAddress` are Pro. So the name and the address cost
+ * nothing extra on a call that was going to ask for the website anyway.
+ *
+ * That is what makes discovery affordable here: one billed call returns up to
+ * twenty businesses complete with the website — the exact field Google Maps'
+ * own results feed withholds, which was measured and is why the browser route was
+ * abandoned.
+ *
+ * Storage is a separate question from retrieval, and the project's stance does not
+ * change: the name and the address are used **in the run** to find the company in
+ * the Receita base and are then discarded. What persists is the `place_id`, plus
+ * the CNPJ we matched — which is public Receita data, not Google's.
+ */
+export const DISCOVERY_FIELD_MASK =
+  "places.id,places.websiteUri,places.displayName,places.formattedAddress,nextPageToken";
+
 /** The SKU this adapter bills against. Named so the budget can key on it. */
 export const PLACES_SKU = "textsearch.enterprise";
 
@@ -45,6 +66,31 @@ export interface PlaceWebsite {
   placeId: string;
   websiteUrl: string | null;
 }
+
+/**
+ * One business as discovery sees it.
+ *
+ * `name` and `address` are deliberately NOT part of `PlaceWebsite`: that type
+ * describes what may be stored, and these two may not be. They live here, in the
+ * shape that crosses the wire and dies with the run.
+ */
+export interface PlaceBusiness {
+  placeId: string;
+  websiteUrl: string | null;
+  /** Transient. For matching against the Receita, never for a column. */
+  name: string | null;
+  /** Transient, same rule. Google's `formattedAddress`. */
+  address: string | null;
+}
+
+export interface PlaceSearchPage {
+  businesses: PlaceBusiness[];
+  /** Pass back as `pageToken` for the next twenty. Each page is a billed call. */
+  nextPageToken: string | null;
+}
+
+/** Google caps `searchText` at twenty results per call. */
+export const PLACES_MAX_RESULTS = 20;
 
 export interface GooglePlacesOptions {
   apiKey: string;
@@ -121,7 +167,121 @@ export function createGooglePlaces(opts: GooglePlacesOptions) {
     return { placeId: place.id, websiteUrl: place.websiteUri ?? null };
   }
 
-  return { findWebsite };
+  /**
+   * Businesses matching a category-and-place query — the discovery direction.
+   *
+   * The inverse of `findWebsite`, which starts from a company we already know and
+   * asks Google for its site. This starts from Google and asks which businesses
+   * exist, which is the only direction that can surface a company the Receita
+   * query never reached.
+   *
+   * One call, up to twenty businesses, each with its website. Compare the browser
+   * route this replaced: a Maps results feed gives about seven cards and **no**
+   * website, so the site cost a further page load per business — roughly eight
+   * loads for seven businesses, against one call for twenty, with blocking and
+   * account risk on top.
+   *
+   * `locationBias` is how geography is actually controlled. Putting a city name in
+   * the query text is only a hint, and on Maps it demonstrably drifted — a search
+   * for São Paulo returned businesses from the ABC region. A circle with real
+   * coordinates is unambiguous.
+   */
+  async function searchBusinesses(
+    query: string,
+    search: {
+      /** Continues a previous page. Do not change the query when passing one. */
+      pageToken?: string | null;
+      maxResults?: number;
+      locationBias?: { latitude: number; longitude: number; radiusMeters: number };
+    } = {}
+  ): Promise<PlaceSearchPage> {
+    await opts.beforeRequest?.();
+
+    const wait = lastCallAt + MIN_INTERVAL_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastCallAt = Date.now();
+
+    const body: Record<string, unknown> = {
+      textQuery: query,
+      languageCode: "pt-BR",
+      regionCode: "BR",
+      maxResultCount: Math.min(
+        Math.max(search.maxResults ?? PLACES_MAX_RESULTS, 1),
+        PLACES_MAX_RESULTS
+      ),
+    };
+    if (search.pageToken) body.pageToken = search.pageToken;
+    if (search.locationBias) {
+      const { latitude, longitude, radiusMeters } = search.locationBias;
+      body.locationBias = { circle: { center: { latitude, longitude }, radius: radiusMeters } };
+    }
+
+    let res: Response;
+    try {
+      res = await http.fetch(`${BASE_URL}/places:searchText`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": opts.apiKey,
+          "X-Goog-FieldMask": DISCOVERY_FIELD_MASK,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new PlacesError(`erro de rede no Places: ${(err as Error).message}`);
+    }
+
+    // Billed whether or not anything matched, so counted before the status check.
+    await opts.afterRequest?.();
+
+    if (!res.ok) {
+      throw new PlacesError(
+        `Places ${res.status}: ${(await res.text()).slice(0, 300)}`,
+        res.status
+      );
+    }
+
+    const data = (await res.json()) as {
+      places?: {
+        id?: string;
+        websiteUri?: string;
+        displayName?: { text?: string };
+        formattedAddress?: string;
+      }[];
+      nextPageToken?: string;
+    };
+
+    const businesses: PlaceBusiness[] = [];
+    for (const place of data.places ?? []) {
+      // No id, no business: the id is the only durable handle, and a row without
+      // one could never be de-duplicated across runs.
+      if (!place.id) continue;
+      businesses.push({
+        placeId: place.id,
+        websiteUrl: place.websiteUri ?? null,
+        name: place.displayName?.text ?? null,
+        address: place.formattedAddress ?? null,
+      });
+    }
+
+    return { businesses, nextPageToken: data.nextPageToken ?? null };
+  }
+
+  return { findWebsite, searchBusinesses };
+}
+
+/**
+ * A discovery query for the Places API.
+ *
+ * Plain text, because that is what `searchText` takes: the activity and the place,
+ * in the order a person would type them. The quoting that organic search needs is
+ * pointless here — Places is not matching a document, it is matching a business.
+ */
+export function discoveryQuery(term: string, place: string | null): string {
+  const activity = term.trim();
+  if (!activity) return "";
+  const where = (place ?? "").trim();
+  return where ? `${activity} em ${where}` : activity;
 }
 
 /**

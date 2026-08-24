@@ -50,7 +50,78 @@ ZIPs mensais da Receita  →  filtro no meio do stream  →  Parquet  →  DuckD
 
 O filtro acontece **enquanto** o arquivo é lido, não depois: uma linha que não passa
 nunca toca o disco. Só `situacao = '02'` (ativa) já corta 60% do arquivo, e das 34
-colunas do layout guardamos 17.
+colunas do layout guardamos 18.
+
+### A atividade secundária, que faltava inteira
+
+A Receita publica, por estabelecimento, uma lista de atividades **secundárias** — e o
+projeto nunca a leu: `rf-layout.ts` ia do índice 11 (CNAE principal) direto para o 13. Uma
+empresa cujo CNAE alvo está nessa lista era invisível para toda consulta daqui.
+
+O README já dizia que o CNAE é um filtro grosso na direção que traz lixo (a clínica de
+oncologia sob 8599). Isto é a mesma grosseria na direção que **perde** empresa, e essa
+metade nunca havia sido contada. Medido na base inteira em disco (parte 0, 10,8 M
+estabelecimentos ativos):
+
+| CNAE alvo | principal | secundária | ganho     | divisões da secundária |
+| --------- | --------- | ---------- | --------- | ---------------------- |
+| 8599      | 336.422   | 480.757    | **+143%** | 84 de 87               |
+| 6201      | 30.084    | 92.901     | **+309%** | 79 de 87               |
+| 4781      | 388.100   | 455.014    | **+117%** | 83 de 87               |
+| 4712      | 153.013   | 151.081    | **+99%**  | 78 de 87               |
+| 8630      | 185.883   | 57.084     | **+31%**  | 76 de 87               |
+
+60,6% das linhas têm ao menos um código secundário, 4,19 em média entre elas, no máximo 99.
+O ganho varia muito por ramo — 8630 (consultório médico) rende +31% e 6201
+(desenvolvimento de software) rende +309% — o que é a mesma informação que a coluna
+"rendeu" dá: onde vale mirar. Uma medição anterior por amostragem dizia +76% para o 8630;
+a base inteira diz +31%, e é este o número.
+
+O filtro é **opt-in**, e o padrão desligado é carga em dois sentidos.
+
+Muda o que o número significa. Quem faz disso o negócio e quem lista como sétima atividade
+não são o mesmo prospecto, então as duas contagens andam **separadas** em todo lugar
+(`principal + secundária = total`, sem sobreposição: uma linha que casa dos dois jeitos
+conta como principal) e cada linha diz por qual lado entrou.
+
+E muda o que a consulta custa. `cnae_div` é derivado do CNAE **principal** e é a chave de
+partição, então um casamento pelo secundário não pode ser podado:
+
+|                                                | ms                       |
+| ---------------------------------------------- | ------------------------ |
+| podada, uma página de 100 com todas as colunas | **52**                   |
+| sem poda, a mesma página                       | **485–1117**             |
+| duas fases (varredura estreita → busca podada) | 903–1010 — **sem ganho** |
+
+**Um índice secundário explodido foi medido e rejeitado.** A promessa dele era devolver as
+divisões primárias das empresas que casam, restaurando a poda. A coluna da direita na tabela
+acima é o que mata a ideia: essas empresas se espalham por **76 a 84 das 87 divisões**. Podar
+para 84 de 87 economiza 3% de uma varredura de ~1 s, ao preço de ~26 M linhas a mais, +26%
+de disco e um segundo dataset que pode sair de sincronia em silêncio. Guardar uma coluna
+`cnae_divs` e usar `list_has_any` é pior ainda: não poda (a poda Hive lê nome de diretório) e
+só responde "alguma atividade secundária está na divisão 85", que não é a pergunta de
+ninguém.
+
+A coluna custou **35,7 MB comprimidos em 683 MB de base — +5,5%**, e nenhuma linha entrou ou
+saiu: as 10.841.954 mantidas são as mesmas de antes. Para comparação, `razao_social` sozinha
+custa 142,6 MB e o `email` 101,0 MB.
+
+A coluna é `LIST(VARCHAR)` e não uma string com vírgulas. Todos os códigos têm 7 dígitos
+(100% de 1.022.785 no amostrado), então casar prefixo é `starts_with` por elemento — exato.
+Numa string serializada, `LIKE '%8599%'` casaria `18599xx` no meio da lista. E o `nullif` na
+gravação não é enfeite: `str_split('', ',')` devolve `['']`, uma lista com uma string vazia
+que casaria qualquer prefixo vazio.
+
+Duas regras a mais, e as duas custam linhas de propósito:
+
+- **sem e-mail, fora.** A Receita não publica coluna de site, então o domínio do
+  e-mail registrado é a única coisa para onde apontar um crawl. São 10,7% da base
+  ativa — e quase tudo velho: 56,9% das empresas abertas em 1990 não têm e-mail
+  contra 0,2% das abertas em 2025. Na prática o filtro é "aberta antes de 2021".
+- **estabelecimentos são desnormalizados.** Razão social, natureza jurídica, capital,
+  porte, Simples e MEI são gravados dentro de cada linha em vez de unidos na consulta.
+  Eram dois dos quatro `LEFT JOIN` de toda consulta de descoberta, e nem `empresas`
+  nem `simples` são particionados — cada join varria o arquivo inteiro.
 
 O resultado é uma "API" com filtros e ordenação de verdade, rodando no processo:
 
@@ -77,6 +148,41 @@ Medido de novo depois que as colunas de endereço entraram, com `--fresh` para
 garantir um diretório limpo — o valor anterior registrado aqui (944 MB) foi medido
 num diretório que já tinha recebido mais de uma conversão, e a conversão de
 estabelecimentos usa `APPEND`.
+
+⚠️ **Esses números são anteriores ao filtro de e-mail e à desnormalização** e ainda não
+foram medidos de novo num `--fresh` nacional.
+
+Medido de ponta a ponta com o código novo, na parte 1 de 2026-08 (a cauda histórica,
+escolhida por ser pequena):
+
+|                                        |                      |
+| -------------------------------------- | -------------------- |
+| linhas lidas                           | 4.753.435            |
+| pela regra anterior                    | 1.171.169 (24,6%)    |
+| **pela regra nova (com e-mail)**       | **889.459** (18,7%)  |
+| o e-mail corta                         | 24,1% do que sobrava |
+| com telefone                           | 100,0%               |
+| Parquet de estabelecimentos            | 44,1 MB              |
+| tempo total (empresas + simples + est) | 77 s                 |
+
+Os 24,1% são a cauda velha: a média nacional é 10,7%, porque a parte 1 é quase toda
+pré-2021 e a parte 0 — a que interessa — é quase toda posterior. Nessa mesma rodada a
+razão social ficou em **5,1%**, com só `Empresas1` convertido: é a prova de que as partes
+não pareiam, e o motivo de `--drop-intermediates` ter se recusado a rodar.
+
+E sobre a base 2026-08 já em disco (partes 0-4):
+
+|                                                    |                                |
+| -------------------------------------------------- | ------------------------------ |
+| estabelecimentos ativos                            | 18.681.506                     |
+| **sem e-mail — passam a ser descartados**          | **2.000.490** (10,7%)          |
+| custo da desnormalização (medido em `cnae_div=62`) | +8,4% nos estabelecimentos     |
+| `empresas` + `simples`, que deixam de ser lidos    | 740 MB (684 + 56)              |
+| `empresas` antes do fold                           | 47,0 M linhas, só 13,3 M úteis |
+
+`empresas` é grande porque não é filtrado: são 47,0 milhões de linhas para 17,9 milhões
+de `cnpj_basico` que algum estabelecimento ativo alcança, e `razao_social` sozinha custa
+602 MB comprimidos. Guardá-la dentro do estabelecimento paga o join **e** o excedente.
 
 Para comparação, o projeto anterior gastava **2,96 GB de Postgres para 2,1 milhões**
 de empresas de seis CNAEs. Aqui é o país inteiro em menos espaço, sem Docker e sem
@@ -111,6 +217,21 @@ como ser enriquecido.
 Baixar `Empresas0..9` é o que fecha a conta, independentemente de quantas partes de
 Estabelecimentos você usar. O `data:sync` mede e avisa no fim da execução, porque
 antes o buraco era invisível.
+
+**Desde a desnormalização isso virou irreversível dentro de uma rodada.** A razão social
+é gravada na linha do estabelecimento, então converter estabelecimentos contra um
+`empresas` incompleto grava o buraco no Parquet — não é mais um join que melhora sozinho
+quando as outras partes chegam. Daí a ordem fixa da conversão: `empresas` e `simples`
+inteiros primeiro, estabelecimentos depois. Corrigir depois exige `--fresh`:
+
+```
+pnpm data:sync --only empresas --parts 0,1,2,3,4,5,6,7,8,9
+pnpm data:sync --only simples
+pnpm data:sync --only estabelecimentos --fresh --offline
+```
+
+Rodar a conversão de estabelecimentos sem esses dois em disco não grava nulo em
+silêncio: falha com `MissingJoinInputError` dizendo exatamente isso.
 
 ### A fonte é a Receita, não um espelho
 
@@ -231,6 +352,24 @@ descartada, então a coluna "rendeu" transforma uma decepção por empresa numa 
 de mira. Um CNAE que ninguém processou mostra travessão, não `0%`: nunca tentado e
 tentado sem resultado são fatos opostos.
 
+**Um lead sem CNPJ é alcançado só pelo próprio site — então o crawl vai fundo.** O crawl
+raso segue no máximo `depth` links, e só os que _parecem_ página de contato: é o suficiente
+para a pontuação, que quer um telefone e algum texto. Para a aba da internet aberta isso não
+serve, porque ali o contato **é** a entrega e não há telefone da Receita para cair de volta.
+Com `maxPages`, o mesmo `crawlSite` passa a caminhar em largura pelo host, tratando
+`/contato` como prioridade e não como filtro, até um teto de páginas.
+
+A diferença é medida, não suposta: num teste com o contato a dois cliques de distância
+atrás de `/institucional/equipe`, o raso devolve lista vazia e o fundo acha. Numa rodada
+real, a média foi de **5,6 páginas por site** (antes 1 a 3).
+
+Os sete sites que continuaram sem contato dizem por quê, e nenhum é bug do crawler: dois
+responderam 403, um tem certificado vencido, um domínio não existe, um só abre com
+JavaScript, um teve o contato recuperado ao subir o timeout de 8 s para 20 s, e um — um
+Next.js — simplesmente não traz contato nenhum no HTML servido. A coluna de contato mostra
+esse motivo em vez de uma célula vazia, porque célula vazia sem motivo é indistinguível de
+crawler quebrado.
+
 **O crawl respeita robots.txt** e espera 1s entre requisições ao mesmo host — os dois
 faltavam na versão anterior, o que era defensável quando era uma home por empresa e
 deixa de ser num crawl que segue links.
@@ -342,19 +481,24 @@ trabalho por vez, no banco e não no JavaScript.
 
 ## Comandos
 
-|                            |                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------ |
-| `pnpm dev`                 | painel em http://localhost:3200                                                            |
-| `pnpm data:sync`           | baixa e converte a base (`--parts 0,1,…`, `--dry-run`, `--period`, `--fresh`, `--offline`) |
-| `pnpm db:migrate`          | aplica o schema SQLite                                                                     |
-| `pnpm db:backfill-address` | preenche o endereço das empresas adicionadas antes da coluna existir                       |
-| `pnpm serp:login`          | abre o perfil do crawler num Chrome sem automação, para você entrar nas contas             |
-| `pnpm linkedin:enrich`     | lê as páginas do LinkedIn que a busca já achou (`--dry-run`, `--limit`)                    |
-| `pnpm test`                | testes                                                                                     |
-| `pnpm typecheck`           | tsc em todos os pacotes                                                                    |
+|                            |                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`                 | painel em http://localhost:3200                                                                                    |
+| `pnpm data:sync`           | baixa e converte a base (`--parts 0,1,…`, `--dry-run`, `--period`, `--fresh`, `--offline`, `--drop-intermediates`) |
+| `pnpm db:migrate`          | aplica o schema SQLite                                                                                             |
+| `pnpm db:backfill-address` | preenche o endereço das empresas adicionadas antes da coluna existir                                               |
+| `pnpm serp:login`          | abre o perfil do crawler num Chrome sem automação, para você entrar nas contas                                     |
+| `pnpm linkedin:enrich`     | lê as páginas do LinkedIn que a busca já achou (`--dry-run`, `--limit`)                                            |
+| `pnpm test`                | testes                                                                                                             |
+| `pnpm typecheck`           | tsc em todos os pacotes                                                                                            |
 
 Depois do `data:sync`, `data/downloads/` pode ser apagado — são 2,9 GB de ZIPs que só
 servem para reconverter sem baixar de novo.
+
+`data/parquet/empresas/` e `data/parquet/simples.parquet` também: desde a
+desnormalização eles são **entrada da conversão**, não tabela de consulta — nenhuma
+query os lê. `--drop-intermediates` apaga os dois no fim de uma rodada que converteu
+estabelecimentos. Deixar não quebra nada; é só disco (740 MB na base nacional).
 
 ⚠️ **Não exponha essa porta na rede.** O painel não tem autenticação e foi feito para
 `localhost`.

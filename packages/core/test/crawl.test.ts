@@ -9,6 +9,9 @@ import {
   crawlSite,
   HostThrottle,
   mapLimit,
+  emailsFromHtml,
+  phonesFromHtml,
+  rankEmails,
 } from "../src/usecases/crawl";
 import { describeFetchError } from "../src/domain/netError";
 import type { HttpPort } from "../src/ports/index";
@@ -348,4 +351,209 @@ test("an institutional address belongs to the institution, not the person", () =
 test("a real company domain still passes all of it", () => {
   assert.equal(websiteFromEmail("contato@cursinhoalfa.com.br"), "https://cursinhoalfa.com.br");
   assert.equal(websiteFromEmail("vendas@suapadaria.com.br"), "https://suapadaria.com.br");
+});
+
+/**
+ * Os contatos que a varredura da internet aberta entrega.
+ *
+ * O viés é precisão, e o motivo é concreto: esta lista vai virar a mensagem que
+ * alguém manda. Um e-mail errado aqui escreve para um estranho — o autor do tema
+ * do site, o fornecedor de analytics — então é melhor faltar do que sobrar.
+ */
+test("extrai e-mails de contato e descarta os que não são da empresa", () => {
+  const emails = emailsFromHtml(`
+    <a href="mailto:contato@kaits.com.br">Fale conosco</a>
+    <a href="mailto:vendas@kaits.com.br?subject=Ola">Vendas</a>
+    <img src="/logo@2x.png">
+    <span>suporte@example.com</span>
+    <span>a@b.co</span>
+    <span>theme@wixpress.com</span>
+  `);
+  assert.deepEqual(emails, ["contato@kaits.com.br", "vendas@kaits.com.br"]);
+});
+
+test("extrai telefones deliberados e ignora CNPJ e CEP", () => {
+  const phones = phonesFromHtml(`
+    <a href="https://wa.me/5511998877665">WhatsApp</a>
+    <a href="tel:+551140028922">(11) 4002-8922</a>
+    <p>ou (21) 3333-4444</p>
+    <p>CNPJ 12.345.678/0001-99 · CEP 01310100</p>
+  `);
+  // O wa.me vem primeiro por ser o mais deliberado, e o número repetido em
+  // texto não entra duas vezes.
+  assert.deepEqual(phones, ["+5511998877665", "+551140028922", "+552133334444"]);
+});
+
+test("o e-mail do próprio domínio vem primeiro, o da agência por último", () => {
+  // Medido num site real: `fuse@fuse.com.br` no rodapé de uma administradora de
+  // condomínios. Estruturalmente é idêntico a um contato de verdade; o que o
+  // distingue é de QUEM é o domínio.
+  //
+  // Ordenar, e não excluir: uma versão anterior descartava domínio de terceiro e
+  // com isso perdia o contato de uma empresa em `marca.com.br` cujo e-mail é
+  // `contato@grupomarca.com.br`. Contato ausente é lead inacionável; contato
+  // estranho no fim de uma lista de oito, onde a tela mostra os dois primeiros,
+  // custa quase nada.
+  const html = `
+    <a href="mailto:%20atendimento@selladm.com.br">contato</a>
+    <p>fuse@fuse.com.br construiu · dono@gmail.com</p>`;
+  const out = emailsFromHtml(html, "www.selladm.com.br");
+  assert.equal(out[0], "atendimento@selladm.com.br", "o do próprio domínio manda");
+  assert.equal(out[1], "dono@gmail.com", "free-mail é contato real para negócio pequeno");
+  assert.equal(out[2], "fuse@fuse.com.br", "domínio de terceiro fica por último");
+});
+
+test("versão de biblioteca em CDN não é e-mail", () => {
+  // Medido numa rodada real: `bootstrap@5.3.3` e `bootstrap-icons@1.10.5`
+  // entraram como contato, porque `5.3.3` parece um domínio. O último rótulo tem
+  // de ser LETRAS. E o corpo de <script> sai inteiro: o e-mail do autor de uma
+  // biblioteca (`hey@craftpip.com`, também real) não é contato de ninguém aqui, e
+  // não é visível para quem lê a página — que é o teste do que é um contato.
+  const html = `
+    <script>var l="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/x.js"; // hey@craftpip.com </script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/x.css">
+    <a href="mailto:contato@getusp.com.br">Contato</a>
+    <p>Ou fale com sa.concursos@yahoo.com.br</p>`;
+  assert.deepEqual(emailsFromHtml(html, "getusp.com.br"), [
+    "contato@getusp.com.br",
+    "sa.concursos@yahoo.com.br",
+  ]);
+});
+
+test("e-mail escondido com entidade HTML é lido inteiro", () => {
+  // Site real obfusca a última letra para derrotar raspador: `.com.b&#114;` vinha
+  // como `.com.b`, um domínio truncado com cara de endereço bom.
+  const out = emailsFromHtml("<p>carolina@predicado.com.b&#114;</p>", "graiche.com.br");
+  assert.deepEqual(out, ["carolina@predicado.com.br"]);
+});
+
+test("comentário HTML não vira contato", () => {
+  const out = emailsFromHtml(
+    "<!-- theme by hey@craftpip.com --><a href='mailto:contato@alfa.com.br'>c</a>",
+    "alfa.com.br"
+  );
+  assert.deepEqual(out, ["contato@alfa.com.br"]);
+});
+
+test("a ordenação sobrevive à junção de várias páginas", () => {
+  // `mergeContacts` concatena, então sem re-ordenar no fim o e-mail de terceiro
+  // achado na página 1 fica acima do da própria empresa achado na página 3 — foi
+  // o que colocou `hey@craftpip.com` na frente do contato real.
+  assert.deepEqual(
+    rankEmails(["hey@craftpip.com", "sa@yahoo.com.br", "contato@sa.com.br"], "sa.com.br"),
+    ["contato@sa.com.br", "sa@yahoo.com.br", "hey@craftpip.com"]
+  );
+});
+
+test("e-mail num domínio irmão não é perdido", () => {
+  // O caso que motivou a mudança: o site é marca.com.br e o contato é do grupo.
+  const out = emailsFromHtml("<p>contato@grupomarca.com.br</p>", "marca.com.br");
+  assert.deepEqual(out, ["contato@grupomarca.com.br"]);
+});
+
+test("o %20 do mailto não vira parte do endereço, nem uma segunda entrada", () => {
+  // Sem excluir os hrefs da varredura de texto, `%20foo@x` casava de novo do meio
+  // e produzia `20foo@x` — o mesmo endereço com um caractere de lixo.
+  const out = emailsFromHtml('<a href="mailto:%20ola@alfa.com.br">x</a>', "alfa.com.br");
+  assert.deepEqual(out, ["ola@alfa.com.br"]);
+});
+
+test("telefone de placeholder é descartado", () => {
+  // `+5599999999999` veio de um site real.
+  assert.deepEqual(phonesFromHtml('<a href="tel:+5599999999999">x</a>'), []);
+  assert.deepEqual(phonesFromHtml('<a href="tel:+551130813244">x</a>'), ["+551130813244"]);
+});
+
+test("um dígito solto em texto não vira telefone", () => {
+  // Sem os parênteses do DDD, uma corrida de 11 dígitos em texto brasileiro é
+  // tão provavelmente um pedaço de CNPJ quanto um telefone.
+  assert.deepEqual(phonesFromHtml("<p>11998877665</p>"), []);
+  assert.deepEqual(emailsFromHtml("<p>sem email aqui</p>"), []);
+});
+
+/**
+ * O crawl fundo, que existe por um caso concreto: um site cujo contato estava
+ * atrás de um menu que o crawl raso nunca alcançava.
+ *
+ * O raso segue no máximo `depth` links e só os que PARECEM página de contato. O
+ * fundo trata isso como prioridade e não como filtro, e caminha em largura até o
+ * teto de páginas — que é o que faz diferença quando o endereço está a dois
+ * cliques dentro, numa página chamada `/institucional`.
+ */
+test("o crawl fundo acha o contato atrás de dois cliques", async () => {
+  const http = stubHttp({
+    "https://alfa.com.br/robots.txt": { status: 404 },
+    "https://alfa.com.br": {
+      body: `<html><head><title>Alfa</title></head><body>
+        <a href="/institucional">Institucional</a>
+        <a href="/blog/post-1">Blog</a>
+      </body></html>`,
+    },
+    // Nada de contato aqui: só o caminho para ele. O nome não casa com
+    // "contato", que é exactamente o que o raso não alcança.
+    "https://alfa.com.br/institucional": {
+      body: `<html><body><a href="/institucional/equipe">Nossa equipe</a></body></html>`,
+    },
+    "https://alfa.com.br/institucional/equipe": {
+      body: `<html><body><a href="mailto:diretoria@alfa.com.br">e-mail</a>
+        <a href="tel:+551133334444">tel</a></body></html>`,
+    },
+    "https://alfa.com.br/blog/post-1": { body: "<html><body>texto</body></html>" },
+  });
+
+  const shallow = await crawlSite("https://alfa.com.br", { http, depth: 2 });
+  assert.deepEqual(shallow.emails, [], "o raso não chega lá — é o bug relatado");
+
+  const deep = await crawlSite("https://alfa.com.br", { http, depth: 3, maxPages: 10 });
+  assert.deepEqual(deep.emails, ["diretoria@alfa.com.br"]);
+  assert.deepEqual(deep.phones, ["+551133334444"]);
+  assert.ok(deep.pagesFetched > shallow.pagesFetched);
+});
+
+test("o crawl fundo guarda o texto das subpáginas e reordena os e-mails", async () => {
+  // As duas linhas que fazem isso moravam só no ramo raso, então o crawl fundo lia
+  // uma dúzia de páginas e jogava o texto fora — o scorer via só a home. E a
+  // ordenação não rodava, então e-mail de terceiro achado antes ficava na frente.
+  const http = stubHttp({
+    "https://gama.com.br/robots.txt": { status: 404 },
+    "https://gama.com.br": {
+      body: `<html><head><title>Gama</title></head><body>
+        <p>hey@craftpip.com</p><a href="/sobre">Sobre</a></body></html>`,
+    },
+    "https://gama.com.br/sobre": {
+      body: `<html><body><p>palavra-so-da-subpagina</p>
+        <a href="mailto:contato@gama.com.br">e-mail</a></body></html>`,
+    },
+  });
+  const s = await crawlSite("https://gama.com.br", { http, depth: 2, maxPages: 6 });
+  assert.ok(
+    s.textExcerpt?.includes("palavra-so-da-subpagina"),
+    "o texto da subpágina tem de chegar ao excerpt"
+  );
+  assert.equal(s.emails[0], "contato@gama.com.br", "o do próprio domínio vem primeiro");
+});
+
+test("o crawl fundo respeita o teto de páginas e não sai do host", async () => {
+  const links = Array.from({ length: 30 }, (_, i) => `<a href="/p${i}">${i}</a>`).join("");
+  const routes: Record<string, { status?: number; body?: string }> = {
+    "https://beta.com.br/robots.txt": { status: 404 },
+    "https://beta.com.br": {
+      body: `<html><body>${links}<a href="https://outro.com/x">fora</a></body></html>`,
+    },
+  };
+  for (let i = 0; i < 30; i++) {
+    routes[`https://beta.com.br/p${i}`] = { body: "<html><body>nada</body></html>" };
+  }
+  routes["https://outro.com/x"] = {
+    body: "<html><body>naoDeveriaSerLido@outro.com</body></html>",
+  };
+
+  const s = await crawlSite("https://beta.com.br", {
+    http: stubHttp(routes),
+    depth: 1,
+    maxPages: 5,
+  });
+  assert.ok(s.pagesFetched <= 5, `esperava no máximo 5 páginas, li ${s.pagesFetched}`);
+  // Link para outro host nunca é seguido, então o e-mail de lá não aparece.
+  assert.ok(!s.emails.some((e) => e.includes("outro.com")));
 });

@@ -64,6 +64,22 @@ export const cnaePicks = sqliteTable(
     reachTotal: integer("reach_total").notNull().default(0),
     reachWithPhone: integer("reach_with_phone").notNull().default(0),
     reachRecent: integer("reach_recent").notNull().default(0),
+    /**
+     * The same reach counted through SECONDARY activities, and disjoint from the
+     * three above — a company matching both ways is counted as primary only.
+     *
+     * Its own columns rather than added into `reach_total`, because a company
+     * whose whole business is this CNAE and one that lists it third among nine
+     * are different prospects, and `reach_total` is already stored in every
+     * existing row. Widening it would silently restate what those rows claim.
+     *
+     * Zero means "not asked", not "nobody holds it" — a pick saved before this
+     * existed, or saved with the toggle off, is indistinguishable from a genuine
+     * zero here, so the UI shows a dash until a run actually measured it.
+     */
+    reachSecundaria: integer("reach_secundaria").notNull().default(0),
+    reachSecundariaWithPhone: integer("reach_secundaria_with_phone").notNull().default(0),
+    reachSecundariaRecent: integer("reach_secundaria_recent").notNull().default(0),
     /** Why the model picked it — shown next to the number so both can be judged. */
     rationale: text("rationale"),
     suggestedBy: text("suggested_by", { enum: ["llm", "human"] })
@@ -87,6 +103,20 @@ export const companies = sqliteTable(
     nomeFantasia: text("nome_fantasia"),
     cnae: text("cnae").notNull(),
     cnaeDescricao: text("cnae_descricao"),
+    /**
+     * Whether this company was reached by its primary or its secondary CNAE.
+     *
+     * Stored because it is otherwise lost at exactly the moment it matters. The
+     * row keeps the company's own primary CNAE, so a company pulled in because
+     * "8599" was its seventh registered activity looks, from here on, like a
+     * company in whatever it registered first — and the scoring prompt sees only
+     * that. This is the difference between "modelo reprovou por ramo" being a
+     * surprise and being expected.
+     *
+     * Null on every row added before the column existed. Null is not
+     * "principal": it means nobody recorded which way it matched.
+     */
+    cnaeMatch: text("cnae_match", { enum: ["principal", "secundaria"] }),
     uf: text("uf"),
     municipio: text("municipio"),
     bairro: text("bairro"),
@@ -217,7 +247,9 @@ export const crawls = sqliteTable(
     httpStatus: integer("http_status"),
     error: text("error"),
     /** How the URL was discovered, so a bad guess can be told from a dead site. */
-    urlSource: text("url_source", { enum: ["email", "places", "manual", "search"] }),
+    urlSource: text("url_source", {
+      enum: ["email", "places", "manual", "search", "discovery"],
+    }),
     signals: text("signals", { mode: "json" }),
     /** Capped at 8 KB by the writer — see crawl.ts. */
     textExcerpt: text("text_excerpt"),
@@ -326,8 +358,15 @@ export const impressions = sqliteTable(
 /**
  * Background work. One row per run, progress written as it goes.
  *
- * `jobs_one_running_idx` is a partial unique index: two fast clicks cannot start
- * two crawls. The guarantee belongs in the database, not in a React handler.
+ * `jobs_one_running_idx` is a partial unique index over `(status, lane)`: two
+ * fast clicks cannot start two crawls. The guarantee belongs in the database,
+ * not in a React handler.
+ *
+ * It is per *lane* rather than global because the original one-job rule blocked
+ * something legitimate: sweeping the open internet for companies that are not in
+ * the project while also working the companies that are. Those two touch
+ * different tables and different Chrome profiles, so they are allowed to
+ * overlap. Within a lane the old guarantee is untouched. See `JobLane`.
  */
 export const jobs = sqliteTable(
   "jobs",
@@ -343,8 +382,16 @@ export const jobs = sqliteTable(
         "pipeline",
         "continuous",
         "search",
+        "openweb",
       ],
     }).notNull(),
+    /**
+     * Which lock this job takes. Derived from `kind` by `laneOf`, stored rather
+     * than computed so the partial unique index can be a plain column index.
+     */
+    lane: text("lane", { enum: ["receita", "openweb"] })
+      .notNull()
+      .default("receita"),
     projectId: text("project_id"),
     status: text("status", { enum: ["running", "done", "failed", "cancelled"] }).notNull(),
     progress: text("progress", { mode: "json" }),
@@ -355,9 +402,171 @@ export const jobs = sqliteTable(
   },
   (t) => [
     uniqueIndex("jobs_one_running_idx")
-      .on(t.status)
+      .on(t.status, t.lane)
       .where(sql`status = 'running'`),
     index("jobs_recent_idx").on(t.startedAt),
+  ]
+);
+
+/**
+ * That we ran one discovery query against the open internet.
+ *
+ * Exists for the same reason `search_lookups` does: without it, "this query found
+ * nothing" and "this query never ran" are the same absence. And the invariant is
+ * the same one — **a refused run writes NO row here**, because a row would assert
+ * we looked when we were turned away.
+ */
+export const webQueries = sqliteTable(
+  "web_queries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    jobId: integer("job_id"),
+    /** The exact text sent, so a disappointing sweep can be reproduced by hand. */
+    query: text("query").notNull(),
+    /** Which engine answered. "places" today; the column outlives the choice. */
+    provider: text("provider").notNull(),
+    /** Businesses the engine returned, before any filtering. */
+    considered: integer("considered").notNull().default(0),
+    /** Businesses that survived and became new rows. */
+    kept: integer("kept").notNull().default(0),
+    ranAt: text("ran_at").notNull().default(now),
+  },
+  (t) => [index("web_queries_project_idx").on(t.projectId, t.ranAt)]
+);
+
+/**
+ * A business found on the open internet, keyed by its website rather than a CNPJ.
+ *
+ * The CNPJ is what we are trying to discover here, so it cannot be the key. The
+ * registrable domain is: one website is one prospect, and `apexOf` is what makes
+ * `blog.x.com.br` and `x.com.br` stop being two leads. Two Google places that
+ * share a website — branches of one chain — collapse into one row, which is the
+ * right answer for something being sold to once.
+ *
+ * **There is no name column, and that is deliberate.** Google's terms let us keep
+ * the `place_id` and nothing else, so the name and address the API returns are
+ * used during the run to find the company in the Receita base and then discarded.
+ * What the screen shows instead comes from `signals.title` — our own crawl of the
+ * site, which is our observation to keep. The same reasoning that gave
+ * `places_lookups` its shape, applied to a table that could have quietly broken it.
+ *
+ * `verdict` is NOT NULL with no 'unknown' member: there is no way to persist a
+ * lead nobody classified. And "unmatched" means WE COULD NOT MATCH IT — never
+ * that the business has no CNPJ, is informal, or is unregistered.
+ */
+export const webLeads = sqliteTable(
+  "web_leads",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** The registrable domain. See `apexOf`. */
+    apex: text("apex").notNull(),
+    /** The URL as found, before any crawl redirect. */
+    websiteUrl: text("website_url").notNull(),
+    /** Google's durable handle. The one Google-derived value we may keep. */
+    placeId: text("place_id"),
+    /** Which query first surfaced it, so a lead can be traced to its origin. */
+    queryId: integer("query_id"),
+    verdict: text("verdict", { enum: ["in_reach", "out_of_reach", "unmatched"] }).notNull(),
+    /** Which dimension put an in-base company out of reach. */
+    outOfReachBy: text("out_of_reach_by", { enum: ["cnae", "uf", "other"] }),
+    matchedCnpj: text("matched_cnpj"),
+    /** How the CNPJ was established, so a bad match can be audited. */
+    matchVia: text("match_via", {
+      enum: ["address", "mirror", "email_domain", "crawl_host", "manual"],
+    }),
+    /** The matched company's primary CNAE — the fact that makes "out of reach" checkable. */
+    matchedCnae: text("matched_cnae"),
+    /** What our crawl of the site found. Same columns as `crawls`, same meanings. */
+    finalUrl: text("final_url"),
+    httpStatus: integer("http_status"),
+    crawlError: text("crawl_error"),
+    signals: text("signals", { mode: "json" }),
+    textExcerpt: text("text_excerpt"),
+    pagesFetched: integer("pages_fetched").notNull().default(0),
+    /**
+     * Contacts our crawl read off the site, across every page it fetched.
+     *
+     * Their own columns rather than left inside `signals`, because for a lead with
+     * no CNPJ these ARE the deliverable: there is no `contacts` row to fall back
+     * on — that table is keyed by CNPJ — and no Receita phone. A business found
+     * this way is reachable only through what its own site says.
+     *
+     * An empty array means we read pages and found none. `crawled_at` carries the
+     * difference from "nobody looked", as it does for every other column here.
+     */
+    emails: text("emails", { mode: "json" }).$type<string[]>(),
+    phones: text("phones", { mode: "json" }).$type<string[]>(),
+    /** Null means nobody crawled it. Set means we looked, error or not. */
+    crawledAt: text("crawled_at"),
+    /**
+     * Your decision about this lead, and how far you got with it.
+     *
+     * Columns here rather than a row in `leads`, because that table is keyed by
+     * CNPJ and the leads this tab exists for do not have one. Same five states, so
+     * the two tabs mean the same thing by "contatado" — a second vocabulary would
+     * make the pipeline unreadable across them.
+     *
+     * Null means undecided. That is different from every state below, including
+     * "flagged": marking something is an act, and absence is not one.
+     */
+    status: text("status", {
+      enum: ["flagged", "contacted", "replied", "won", "lost"],
+    }),
+    /** What happened after you reached out. Yours, never touched by a rerun. */
+    notes: text("notes"),
+    /** When it was turned into a real `companies` row. */
+    promotedAt: text("promoted_at"),
+    discardedAt: text("discarded_at"),
+    foundAt: text("found_at").notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.apex] }),
+    index("web_leads_verdict_idx").on(t.projectId, t.verdict),
+    index("web_leads_status_idx").on(t.projectId, t.status),
+  ]
+);
+
+/**
+ * The score of a lead that has no CNPJ.
+ *
+ * Its own table for the reason `scores` is separate from `companies`: the model
+ * overwrites this row on every run, and a human decision must never live somewhere
+ * a rescore can erase. Keyed by apex, like the lead it belongs to.
+ *
+ * A failed call writes the row with `error` set and every fit NULL — never a
+ * number, for exactly the reason `scores` gives.
+ */
+export const webLeadScores = sqliteTable(
+  "web_lead_scores",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    apex: text("apex").notNull(),
+    fits: text("fits", { mode: "json" }),
+    bestFit: integer("best_fit"),
+    tier: text("tier", { enum: ["hot", "warm", "cold"] }),
+    confidence: text("confidence", {
+      enum: ["high", "medium", "low", "cannot_determine"],
+    }),
+    recommendation: text("recommendation"),
+    wrongType: integer("wrong_type", { mode: "boolean" }).notNull().default(false),
+    hook: text("hook"),
+    advice: text("advice"),
+    evidence: text("evidence", { mode: "json" }),
+    model: text("model"),
+    promptSha: text("prompt_sha"),
+    error: text("error"),
+    scoredAt: text("scored_at").notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.apex] }),
+    index("web_lead_scores_rank_idx").on(t.projectId, t.bestFit),
   ]
 );
 

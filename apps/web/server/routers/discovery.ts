@@ -27,6 +27,8 @@ const filters = z
       .array(z.string().regex(/^\d{2,7}$/))
       .max(40)
       .optional(),
+    /** Casa o CNAE também na atividade secundária. Ver `includeCnaeSecundaria`. */
+    includeCnaeSecundaria: z.boolean().optional(),
     uf: z.array(z.string().length(2)).max(27).optional(),
     foundedFrom: z
       .string()
@@ -109,6 +111,9 @@ export const discoveryRouter = router({
           reachTotal: r?.total ?? 0,
           reachWithPhone: r?.withPhone ?? 0,
           reachRecent: r?.recent ?? 0,
+          reachSecundaria: r?.secundaria ?? 0,
+          reachSecundariaWithPhone: r?.secundariaWithPhone ?? 0,
+          reachSecundariaRecent: r?.secundariaRecent ?? 0,
           // Kept so the model's guess can be compared against the real label —
           // that mismatch is the tell for a plausible-looking wrong code.
           rationale: `${s.rationale}${
@@ -175,6 +180,9 @@ export const discoveryRouter = router({
           reachTotal: r?.total ?? 0,
           reachWithPhone: r?.withPhone ?? 0,
           reachRecent: r?.recent ?? 0,
+          reachSecundaria: r?.secundaria ?? 0,
+          reachSecundariaWithPhone: r?.secundariaWithPhone ?? 0,
+          reachSecundariaRecent: r?.secundariaRecent ?? 0,
           suggestedBy: "human",
           // Only a code that exists AND has companies can be used. Marking an
           // invented code as chosen makes it look like part of the targeting.
@@ -191,6 +199,9 @@ export const discoveryRouter = router({
             reachTotal: r?.total ?? 0,
             reachWithPhone: r?.withPhone ?? 0,
             reachRecent: r?.recent ?? 0,
+            reachSecundaria: r?.secundaria ?? 0,
+            reachSecundariaWithPhone: r?.secundariaWithPhone ?? 0,
+            reachSecundariaRecent: r?.secundariaRecent ?? 0,
             checkedAt: new Date().toISOString(),
           },
         });

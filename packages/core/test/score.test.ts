@@ -6,7 +6,7 @@ import {
   type ScoreCandidate,
 } from "../src/usecases/scoreCompanies";
 import { parseProjectSpec } from "../src/domain/spec";
-import { buildRubricPrompt, promptSha } from "../src/domain/prompt";
+import { buildRubricPrompt, buildScoreSchema, promptSha } from "../src/domain/prompt";
 import type { LlmPort, CompleteOptions } from "../src/ports/index";
 
 const spec = parseProjectSpec({
@@ -48,6 +48,7 @@ function llmReturning(payload: unknown | (() => never)): LlmPort {
 }
 
 const candidate = (cnpj: string, over: Partial<ScoreCandidate> = {}): ScoreCandidate => ({
+  id: cnpj,
   cnpj,
   razaoSocial: "Escola X",
   nomeFantasia: "Escola X",
@@ -260,4 +261,93 @@ test("one impression in a batch turns the rules on for the whole run", () => {
   // The guardrails are still in front of it, not replaced by it.
   assert.match(withImpressions, /Baseie-se SOMENTE nas evidências fornecidas/);
   assert.notEqual(promptSha(withImpressions), promptSha(without));
+});
+
+/**
+ * O bug em que todo o desenho da internet aberta se apoia.
+ *
+ * A normalização da resposta do modelo tirava tudo que não fosse dígito, porque
+ * um modelo a quem se pede um CNPJ devolve ele formatado. Aplicada a uma chave
+ * que não é número, isso não tem sintoma próprio: todo id colapsa em "", cada
+ * entrada sobrescreve a anterior, e todos os candidatos menos um voltam como
+ * "o modelo não respondeu" — que parece problema do modelo, não da busca.
+ */
+const webLead = (apex: string): ScoreCandidate => ({
+  id: apex,
+  cnpj: null,
+  razaoSocial: null,
+  nomeFantasia: apex,
+  cnae: "",
+  cnaeDescricao: null,
+  uf: null,
+  municipio: null,
+  dataInicioAtividade: null,
+  porte: null,
+  mei: false,
+  site: null,
+});
+
+test("dois leads com id não-numérico no mesmo lote NÃO colidem", async () => {
+  const apexes = ["padaria-alfa.com.br", "zangari.com.br", "beta.ind.br"];
+  const llm = llmReturning({
+    results: apexes.map((ref) => ({
+      ref,
+      justification: "ok [RAMO: ok]",
+      wrong_business_type: false,
+      fit: 4,
+      confidence: "high",
+      recommendation: "abordar",
+      evidence: [],
+      hook: null,
+      advice: null,
+    })),
+  });
+
+  const out = await scoreCompanies(llm, spec, apexes.map(webLead), {
+    keyField: "ref",
+    withWebLead: true,
+  });
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((r) => r.id),
+    apexes
+  );
+  // Nenhum voltou com erro: se a chave colapsasse, dois destes teriam.
+  assert.deepEqual(
+    out.map((r) => r.error),
+    [null, null, null]
+  );
+  assert.deepEqual(
+    out.map((r) => r.bestFit),
+    [4, 4, 4]
+  );
+});
+
+test("um lead sem CNAE diz que não sabe, em vez de omitir a linha", () => {
+  const rendered = renderCandidate(webLead("padaria-alfa.com.br"), spec);
+  // A chave aparece como ref, não como um CNPJ inventado.
+  assert.match(rendered, /ref: padaria-alfa\.com\.br/);
+  assert.ok(!rendered.includes("cnpj:"));
+  // E a ausência é dita: um modelo diante de uma linha faltando raciocina a
+  // partir dela ("informal", "pequena"), e essas são invenções.
+  assert.match(rendered, /cnae: não encontrado na Receita/);
+});
+
+test("o promptSha de uma rodada comum NÃO muda por causa da internet aberta", () => {
+  // É o teste que protege todo score já gravado: se este quebrar, "qual rubrica
+  // deu esta nota" passa a ter resposta errada para o histórico inteiro.
+  const antes = promptSha(buildRubricPrompt(spec, {}));
+  assert.equal(promptSha(buildRubricPrompt(spec, { withWebLead: false })), antes);
+  assert.equal(promptSha(buildRubricPrompt(spec, { key: "cnpj" })), antes);
+  // E o inverso: uma rodada de internet aberta É outro prompt, e deve hashear
+  // diferente — ela ganhou regras que a outra não tem.
+  assert.notEqual(promptSha(buildRubricPrompt(spec, { withWebLead: true, key: "ref" })), antes);
+
+  // A propriedade equivalente no schema.
+  assert.deepEqual(buildScoreSchema(spec), buildScoreSchema(spec, { key: "cnpj" }));
+  const ref = buildScoreSchema(spec, { key: "ref" }) as {
+    properties: { results: { items: { properties: Record<string, unknown> } } };
+  };
+  assert.ok("ref" in ref.properties.results.items.properties);
+  assert.ok(!("cnpj" in ref.properties.results.items.properties));
 });

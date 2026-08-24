@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Building2, FolderKanban } from "lucide-react";
+import { Building2, FolderKanban, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProjectSwitcher } from "@/components/project-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -17,6 +17,10 @@ import { ThemeToggle } from "@/components/theme-toggle";
 const TABS = [
   { href: "/", label: "Projetos", Icon: FolderKanban },
   { href: "/companies", label: "Empresas", Icon: Building2 },
+  // A terceira aba não é outra ETAPA, é outra ENTIDADE: um negócio achado na web
+  // que pode não ter CNPJ nenhum, e que por isso não cabe em `companies`. É o
+  // mesmo critério das outras duas — a aba segue o modelo de dados.
+  { href: "/openweb", label: "Internet aberta", Icon: Globe },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

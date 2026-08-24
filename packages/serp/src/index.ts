@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { launch, type Browser, type Page } from "puppeteer-core";
-import { parseGoogle, type SerpPage } from "@cnpj/core";
+import { type Browser, type Page } from "puppeteer-core";
+import { launchProfileBrowser, hardenPage } from "./browser";
+import { parseGoogle, type SerpPage, type SearchPageOptions } from "@cnpj/core";
 
 /**
  * Google, through a real browser, with a person available to solve the CAPTCHA.
@@ -167,10 +168,15 @@ export class SerpBlockedError extends Error {
   }
 }
 
-function googleUrl(query: string): string {
+function googleUrl(query: string, start = 0): string {
   const u = new URL("https://www.google.com/search");
   u.searchParams.set("q", query);
   u.searchParams.set("hl", "pt-BR");
+  // `start` is what the "next page" link itself sends, which is the difference
+  // between this and `num` below: one is a thing people's browsers do, the other
+  // is a thing only a script asks for. Still not free — going deep is its own
+  // signal — so the caller decides, and page one never sends it.
+  if (start > 0) u.searchParams.set("start", String(start));
   // Deliberately NOT setting `num`. Asking for 20 results in one page is a
   // strong bot tell — a person clicking through a browser never sends it — and
   // it is the most likely reason this started drawing 403s. Ten results per
@@ -194,39 +200,15 @@ export function createSerpDriver(opts: SerpDriverOptions) {
 
   async function ensurePage(): Promise<Page> {
     if (page && !page.isClosed()) return page;
-    browser ??= await launch({
+    // Launch flags and the `navigator.webdriver` patch live in `browser.ts`, so
+    // this driver and the Maps one cannot drift apart on how detectable they are.
+    browser ??= await launchProfileBrowser({
       headless,
-      // The installed Chrome, not a downloaded Chromium: puppeteer-core ships
-      // no browser, which keeps ~300 MB out of the install.
-      channel: opts.executablePath ? undefined : "chrome",
       executablePath: opts.executablePath,
       userDataDir: opts.userDataDir,
-      defaultViewport: null,
-      args: [
-        "--lang=pt-BR",
-        "--disable-blink-features=AutomationControlled",
-        // Puppeteer's defaults include flags no ordinary Chrome ever sets;
-        // these two are the ones that show up in fingerprinting.
-        "--no-default-browser-check",
-        "--no-first-run",
-      ],
-      ignoreDefaultArgs: ["--enable-automation"],
     });
     page = await browser.newPage();
-    await page.setExtraHTTPHeaders({ "Accept-Language": "pt-BR,pt;q=0.9" });
-
-    // `navigator.webdriver` is set by the DevTools protocol itself, so the
-    // launch flag above does not clear it. This is the single most-checked
-    // property there is; hiding it is worth the four lines.
-    //
-    // This is where the stealth work stops on purpose. Patching a property that
-    // is trivially observable is housekeeping; shipping a fingerprint-spoofing
-    // plugin is a treadmill that breaks on somebody else's release schedule and
-    // still loses to IP reputation. If Google keeps refusing, the answer is to
-    // search less and lean on DuckDuckGo, not to hide harder.
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    });
+    await hardenPage(page);
 
     if (!headless && process.env.SERP_WARMUP !== "off") await warmProfile(page);
     return page;
@@ -463,8 +445,9 @@ export function createSerpDriver(opts: SerpDriverOptions) {
    * distinguish "nobody was around to solve it" from "the markup changed" — the
    * two need opposite responses, and both are different from "found nothing".
    */
-  async function search(query: string): Promise<SerpPage> {
+  async function search(query: string, page: SearchPageOptions = {}): Promise<SerpPage> {
     const p = await ensurePage();
+    const start = page.start ?? 0;
 
     if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) {
       return {
@@ -498,10 +481,14 @@ export function createSerpDriver(opts: SerpDriverOptions) {
 
     // `res` is null when the query was typed: there is no response object, so
     // the URL and the body are all there is to judge by.
-    const typed = await typeQuery(p, query);
+    //
+    // Typing only reaches page one — there is no box to type an offset into — so
+    // a paginated request goes straight to the URL. That is a slightly worse
+    // disguise, and it is the price of asking for page two at all.
+    const typed = start > 0 ? false : await typeQuery(p, query);
     const res = typed
       ? null
-      : await p.goto(googleUrl(query), {
+      : await p.goto(googleUrl(query, start), {
           waitUntil: "domcontentloaded",
           timeout: 30_000,
         });
@@ -528,7 +515,7 @@ export function createSerpDriver(opts: SerpDriverOptions) {
     // /sorry/ or to the consent host IS the block, whereas the body of a
     // perfectly good results page contains Google's own script checking for
     // that same redirect.
-    let parsed = parseGoogle(await p.content(), p.url());
+    let parsed = parseGoogle(await p.content(), p.url(), { maxHits: page.maxHits });
 
     if (parsed.status === "blocked") {
       if (headless) return parsed; // nothing to hand over
@@ -576,3 +563,4 @@ export {
   type LinkedInFetch,
   type LinkedInMode,
 } from "./linkedin";
+export { launchProfileBrowser, hardenPage, ProfileBusyError } from "./browser";

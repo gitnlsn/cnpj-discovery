@@ -170,6 +170,54 @@ conselho útil; "parece promissor" não é.`;
 
 const OUTPUT_RULES = `Responda um objeto por negócio, na mesma ordem recebida, com o cnpj exato.`;
 
+/**
+ * The same instruction for a run keyed by `ref` instead of `cnpj`.
+ *
+ * A separate constant rather than an interpolation, so the default string stays
+ * byte-identical and every existing `promptSha` keeps its meaning.
+ */
+const OUTPUT_RULES_REF = `Responda um objeto por negócio, na mesma ordem recebida, com o ref exato.`;
+
+/**
+ * How to judge a business found on the open internet rather than in the registry.
+ *
+ * The premise of `EVIDENCE_RULES` is inverted for these: it opens by saying the
+ * data comes from the Receita, which has no website field. Here we have the
+ * website and we do NOT have the registry row.
+ *
+ * Appended rather than edited into that block, for the reason `LINKEDIN_RULES`
+ * gives: editing text in place changes `promptSha` for every run that ever had it,
+ * including ones already scored.
+ *
+ * The load-bearing paragraph is the second one. A missing CNAE here means "we
+ * could not find this company in the Receita" — and a model handed an absence
+ * will reason from it if nobody forbids it, concluding "informal", "very small",
+ * or "probably MEI". All three are inventions, and all three would look like
+ * findings.
+ */
+const WEB_LEAD_RULES = `Alguns negócios aqui vieram da INTERNET ABERTA, não da Receita Federal. Para
+eles a premissa se inverte: temos o SITE e NÃO temos o cadastro.
+
+O que "cnae: não encontrado na Receita" significa: NÃO ACHAMOS o CNPJ desta
+empresa. Não significa que ela não tenha um, nem que seja informal, nem que seja
+MEI, nem que seja pequena, nem que seja nova. Não é evidência de NADA. Não cite
+essa ausência em "evidence", não mexa na nota por causa dela, e não escreva um
+gancho que dê a entender que você sabe algo do cadastro dela.
+
+O que muda a favor: a regra "site: NÃO ENCONTRADO" não se aplica a estes — a
+página foi lida, e o que falta é o registro. Então o texto do site é a evidência
+principal, e pode sustentar confidence "high" sozinho.
+
+"wrong_business_type" aqui quer dizer UMA coisa só: a PÁGINA é de outro ramo. A
+regra de conflito entre CNAE e site não se aplica, porque não há CNAE para
+conflitar.
+
+E o cuidado que só existe aqui: um endereço na web não é um negócio por
+definição. Pode ser blog, portal de franquia, associação de classe, anúncio em
+marketplace, página pessoal de um profissional ou agregador de dados. Se for
+qualquer uma dessas coisas, marque wrong_business_type e diga na justificativa o
+que a página é de fato.`;
+
 // ----------------------------------------------------------------- composer
 
 export interface RubricPromptOptions {
@@ -196,6 +244,23 @@ export interface RubricPromptOptions {
    * before LinkedIn existed.
    */
   withLinkedIn?: boolean;
+  /**
+   * True when at least one candidate came from the open internet rather than the
+   * Receita — see `WEB_LEAD_RULES`.
+   *
+   * Same once-per-run reasoning as the flags above, and the same guarantee: a run
+   * of ordinary Receita companies produces the identical system message it always
+   * did, so its promptSha is unchanged.
+   */
+  withWebLead?: boolean;
+  /**
+   * Which property the model echoes back to identify each business.
+   *
+   * "cnpj" by default, which is what every existing run used. An open-internet
+   * lead has no CNPJ — that is what the run is trying to find — so it is keyed by
+   * "ref" instead.
+   */
+  key?: "cnpj" | "ref";
 }
 
 export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions = {}): string {
@@ -205,6 +270,7 @@ export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions =
   if (opts.withImpressions) parts.push(IMPRESSION_RULES);
   if (opts.withWebPresence) parts.push(WEB_PRESENCE_RULES);
   if (opts.withLinkedIn) parts.push(LINKEDIN_RULES);
+  if (opts.withWebLead) parts.push(WEB_LEAD_RULES);
 
   parts.push(
     `Você avalia empresas brasileiras como potenciais clientes de:\n${spec.summary}\n\n` +
@@ -264,7 +330,7 @@ export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions =
   );
 
   parts.push(ADVICE_RULES);
-  parts.push(OUTPUT_RULES);
+  parts.push(opts.key === "ref" ? OUTPUT_RULES_REF : OUTPUT_RULES);
 
   return parts.join("\n\n");
 }
@@ -280,7 +346,10 @@ export function buildRubricPrompt(spec: ProjectSpec, opts: RubricPromptOptions =
  * in TypeScript. Asking the model for it adds a failure mode and makes the
  * hot/warm/cold mapping unauditable.
  */
-export function buildScoreSchema(spec: ProjectSpec): Record<string, unknown> {
+export function buildScoreSchema(
+  spec: ProjectSpec,
+  opts: { key?: "cnpj" | "ref" } = {}
+): Record<string, unknown> {
   const fitProps: Record<string, unknown> = {};
   for (const axis of spec.rubric.axes) {
     fitProps[axis.key] = {
@@ -292,7 +361,10 @@ export function buildScoreSchema(spec: ProjectSpec): Record<string, unknown> {
   }
 
   const properties: Record<string, unknown> = {
-    cnpj: { type: "string" },
+    // Named `cnpj` by default so the schema — and therefore the prompt hash — is
+    // unchanged for every run that ever existed. `ref` is the open-internet case,
+    // where there is no CNPJ to echo.
+    [opts.key === "ref" ? "ref" : "cnpj"]: { type: "string" },
     // Justification first so generation is conditioned on the reasoning.
     justification: { type: "string" },
     // One boolean, deliberately. The CNAE is a coarse gate: "Cursos

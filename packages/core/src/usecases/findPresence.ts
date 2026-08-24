@@ -11,7 +11,7 @@ import {
   isLinkedInBoilerplate,
   entityTitleMatchesCompany,
 } from "../domain/linkedin";
-import type { SearchHit, SerpPage } from "../domain/serpParse";
+import type { SearchHit, SerpPage, SearchPageOptions } from "../domain/serpParse";
 
 /**
  * Finding a company's digital presence when the Receita gave us no website.
@@ -82,7 +82,14 @@ export interface PresenceCompany {
 /** A provider: DDG over HTTP, or Google through a browser. Same shape. */
 export interface PresenceProvider {
   readonly name: string;
-  search(query: string): Promise<SerpPage>;
+  /**
+   * One page of results.
+   *
+   * `opts` is optional so this path — verifying one company by name — is exactly
+   * what it always was: page one, twelve hits, no offset. The open-internet sweep
+   * is the caller that needs more than one page, and it asks for it explicitly.
+   */
+  search(query: string, opts?: SearchPageOptions): Promise<SerpPage>;
 }
 
 /**

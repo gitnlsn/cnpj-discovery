@@ -37,6 +37,8 @@ const continuousFilters = z
       .array(z.string().regex(/^\d{2,7}$/))
       .max(40)
       .optional(),
+    /** Casa o CNAE também na atividade secundária. Ver `includeCnaeSecundaria`. */
+    includeCnaeSecundaria: z.boolean().optional(),
     uf: z.array(z.string().length(2)).max(27).optional(),
     foundedFrom: z
       .string()

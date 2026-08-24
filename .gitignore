@@ -9,6 +9,8 @@ dist/
 data/downloads/
 data/parquet/
 data/ref/
+# Where DuckDB spills the join that folds empresas into estabelecimentos.
+data/tmp/
 app.db
 app.db-*
 

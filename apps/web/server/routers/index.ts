@@ -7,6 +7,7 @@ import { jobsRouter } from "./jobs";
 import { leadsRouter } from "./leads";
 import { companiesRouter } from "./companies";
 import { impressionsRouter } from "./impressions";
+import { openWebRouter } from "./open-web";
 
 export const appRouter = router({
   project: projectRouter,
@@ -17,6 +18,9 @@ export const appRouter = router({
   leads: leadsRouter,
   companies: companiesRouter,
   impressions: impressionsRouter,
+  // Named openWeb, not discovery: that name already means the opposite
+  // direction — finding companies inside the Receita base.
+  openWeb: openWebRouter,
 });
 
 export type AppRouter = typeof appRouter;

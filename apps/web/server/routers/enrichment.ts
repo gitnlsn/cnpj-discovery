@@ -701,7 +701,7 @@ export const enrichmentRouter = router({
           };
           await ctx.db
             .insert(scores)
-            .values({ projectId: input.projectId, cnpj: result.cnpj, ...row })
+            .values({ projectId: input.projectId, cnpj: result.id, ...row })
             .onConflictDoUpdate({
               target: [scores.projectId, scores.cnpj],
               set: row,

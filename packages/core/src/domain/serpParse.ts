@@ -37,8 +37,33 @@ export type SerpPage =
   | { status: "blocked"; reason: string }
   | { status: "unrecognized" };
 
-/** Hits above this are dropped; nothing useful is on page two of a name search. */
+/**
+ * Hits above this are dropped; nothing useful is on page two of a name search.
+ *
+ * A default rather than a law, because it was chosen for one caller. Verifying
+ * that a company exists needs a handful of results and no more. Sweeping the open
+ * internet for businesses wants everything a page will give, and the page has
+ * already been fetched and paid for — so discarding results there is throwing away
+ * the only free part of the exchange.
+ */
 const MAX_HITS = 12;
+
+export interface ParseOptions {
+  /** Keep up to this many hits. Defaults to `MAX_HITS`. */
+  maxHits?: number;
+}
+
+/**
+ * Asking an engine for one page of results.
+ *
+ * Lives here rather than with the provider interface because both the adapters
+ * that build the request and the parsers that read the response need it, and
+ * neither should have to import from a use case to describe a search.
+ */
+export interface SearchPageOptions extends ParseOptions {
+  /** Result offset. 0 (or absent) is page one. */
+  start?: number;
+}
 
 const FIELD_CHARS = 400;
 
@@ -105,8 +130,14 @@ export function unwrapRedirect(raw: string): string | null {
   return null;
 }
 
-function pushHit(out: SearchHit[], url: string | null, title: string, description: string) {
-  if (!url || out.length >= MAX_HITS) return;
+function pushHit(
+  out: SearchHit[],
+  url: string | null,
+  title: string,
+  description: string,
+  maxHits = MAX_HITS
+) {
+  if (!url || out.length >= maxHits) return;
   if (isNonResult(url)) return;
   if (out.some((h) => h.url === url)) return;
   const t = clip(decodeHtml(title));
@@ -126,7 +157,8 @@ const DDG_EMPTY = /(no-results|No results\.|Nenhum resultado)/i;
  * Server-rendered, which is why DDG needs no browser at all. Results are
  * `<div class="result…">` blocks carrying `result__a`, `result__snippet`.
  */
-export function parseDuckDuckGo(html: string): SerpPage {
+export function parseDuckDuckGo(html: string, opts: ParseOptions = {}): SerpPage {
+  const maxHits = opts.maxHits ?? MAX_HITS;
   if (!html.trim()) return { status: "unrecognized" };
   if (DDG_BLOCKED.test(html))
     return { status: "blocked", reason: "DuckDuckGo bloqueou a busca" };
@@ -142,7 +174,7 @@ export function parseDuckDuckGo(html: string): SerpPage {
     const snippet =
       block.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i) ??
       block.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    pushHit(hits, unwrapRedirect(a[1]), a[2] ?? "", snippet?.[1] ?? "");
+    pushHit(hits, unwrapRedirect(a[1]), a[2] ?? "", snippet?.[1] ?? "", maxHits);
   }
 
   if (hits.length) return { status: "ok", hits };
@@ -242,7 +274,12 @@ function googleSnippet(html: string, from: number): string {
   return text;
 }
 
-export function parseGoogle(html: string, finalUrl?: string): SerpPage {
+export function parseGoogle(
+  html: string,
+  finalUrl?: string,
+  opts: ParseOptions = {}
+): SerpPage {
+  const maxHits = opts.maxHits ?? MAX_HITS;
   if (!html.trim()) return { status: "unrecognized" };
 
   // The URL is the only definitive signal, so it is checked first and on its
@@ -272,7 +309,7 @@ export function parseGoogle(html: string, finalUrl?: string): SerpPage {
     const url = unwrapRedirect(href[1]);
     if (!url) continue;
 
-    pushHit(hits, url, m[1] ?? "", googleSnippet(html, at + m[0].length));
+    pushHit(hits, url, m[1] ?? "", googleSnippet(html, at + m[0].length), maxHits);
   }
 
   // Results first, markers second. A page carrying organic results is not a

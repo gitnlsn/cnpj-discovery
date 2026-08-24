@@ -7,6 +7,7 @@ import {
 } from "../domain/structured";
 import type { Probe } from "../domain/spec";
 import { describeFetchError } from "../domain/netError";
+import { decodeHtml } from "../domain/serpParse";
 import type { HttpPort } from "../ports/index";
 import {
   FREE_MAIL,
@@ -16,7 +17,7 @@ import {
   ACCOUNTANT,
   ACCOUNTANT_WORD,
 } from "../domain/mail";
-import { hostOf, isHub, isBuilder } from "../domain/hosts";
+import { apexOf, hostOf, isHub, isBuilder } from "../domain/hosts";
 
 /**
  * Fetches a company site and turns it into signals.
@@ -114,6 +115,18 @@ export interface SiteSignals {
   igHandle: string | null;
   /** A number found in a wa.me / tel: href — often better than the RF one. */
   sitePhone: string | null;
+  /**
+   * Every contact the crawl could find, across every page it fetched.
+   *
+   * `sitePhone` is kept beside these rather than replaced: it is the ONE number
+   * the scorer reads, and changing what it means would restate the evidence
+   * behind scores already given. These are the list a person works from.
+   *
+   * Empty array means "we read pages and found none". The distinction from "we
+   * never read anything" is carried by `pagesFetched`, as it already was.
+   */
+  emails: string[];
+  phones: string[];
   textExcerpt: string | null;
   /**
    * What the page declares about itself — meta description and JSON-LD.
@@ -160,6 +173,8 @@ function emptySignals(url: string | null): SiteSignals {
     title: null,
     igHandle: null,
     sitePhone: null,
+    emails: [],
+    phones: [],
     textExcerpt: null,
     metaDescription: null,
     jsonLd: null,
@@ -224,10 +239,16 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
     generator,
     platform: detectPlatform(html, generator),
     footerYear: years.length ? Math.max(...years) : null,
-    title: titleMatch?.[1]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? null,
+    // Decoded, because a raw title reaches the screen and the CSV as-is:
+    // "GTA &#8211; Gestão Imobiliária" is what a real crawl produced.
+    title: titleMatch?.[1]
+      ? decodeHtml(titleMatch[1]).replace(/\s+/g, " ").trim().slice(0, 200) || null
+      : null,
     igHandle:
       igMatch?.[1] && !["p", "reel", "explore"].includes(igMatch[1]) ? igMatch[1] : null,
     sitePhone: phoneFromHtml(html),
+    emails: emailsFromHtml(html, hostOf(finalUrl)),
+    phones: phonesFromHtml(html),
     isHttps: finalUrl.startsWith("https://"),
     textExcerpt: text,
     metaDescription,
@@ -244,6 +265,160 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
  * great many micro-businesses is the accountant's line. A `wa.me` href on the
  * company's own site is the number they actually answer.
  */
+/**
+ * Hosts whose addresses are never the business's own.
+ *
+ * A page's HTML carries e-mails that belong to its tooling — the theme author,
+ * the analytics vendor, a placeholder left in a template. Collecting those and
+ * calling them contacts would put a stranger's address in front of somebody about
+ * to send a sales message.
+ */
+const NOT_A_CONTACT =
+  /@(example|test|localhost|sentry|wixpress|squarespace|shopify|godaddy|elementor|wordpress|gravatar|domain|email|yourcompany|empresa|seudominio|site)\b/i;
+
+/** Asset filenames that look like addresses: `logo@2x.png`, `sprite@3x.svg`. */
+const ASSET_AT = /@\d+x\.|\.(png|jpe?g|gif|svg|webp|css|js|woff2?)$/i;
+
+/**
+ * An e-mail, with a real top-level domain.
+ *
+ * The final label must be LETTERS, and that is not pedantry — it is what keeps a
+ * CDN URL from becoming a contact. `cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/…`
+ * contains `bootstrap@5.3.3`, which the obvious pattern reads as a mailbox at the
+ * domain `5.3.3`. Measured on a real crawl: `bootstrap@5.0.2`,
+ * `bootstrap-icons@1.10.5` and friends were landing in contact lists.
+ */
+const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g;
+
+/**
+ * Script and style bodies, removed before anything is read out of a page.
+ *
+ * A library's author leaves their address in a comment — `hey@craftpip.com` came
+ * off a real site this way — and a bundler leaves package specs everywhere. None
+ * of it belongs to the business, and none of it is visible to a human reading the
+ * page, which is the test for whether it is a contact at all.
+ */
+const CODE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
+/** HTML comments — where a theme's leftovers and a library's credits live. */
+const COMMENT = /<!--[\s\S]*?-->/g;
+
+/** More than this on one page and it is a directory, not a business. */
+const MAX_CONTACTS = 8;
+
+/**
+ * Every e-mail worth writing to, from one page.
+ *
+ * `mailto:` first because it is unambiguous — somebody put it there to be
+ * written to. Plain-text addresses second, filtered hard: the point of this is a
+ * list a person will actually send mail to, so a wrong entry costs more than a
+ * missing one.
+ */
+export function emailsFromHtml(html: string, siteHost?: string): string[] {
+  const own = siteHost ? apexOf(`https://${hostOf(`https://${siteHost}`) || siteHost}`) : "";
+  const mine: string[] = [];
+  const free: string[] = [];
+  const others: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (raw: string) => {
+    // `mailto:` values are URL-encoded, and a stray `%20` was reaching the list
+    // as part of the address — measured on a real site.
+    let email = raw.trim();
+    try {
+      email = decodeURIComponent(email);
+    } catch {
+      // A malformed escape is not worth discarding the address over.
+    }
+    email =
+      email
+        .toLowerCase()
+        .replace(/^mailto:/, "")
+        .split("?")[0]
+        ?.trim() ?? "";
+    // Punctuation the surrounding markup or prose left attached.
+    email = email.replace(/^[<("'\s]+/, "").replace(/[>)"'\s.,;:]+$/, "");
+    if (!email || !email.includes("@") || seen.has(email)) return;
+    if (NOT_A_CONTACT.test(email) || ASSET_AT.test(email)) return;
+    const [local, domain] = email.split("@") as [string, string];
+    // A local part of one character is nearly always a template artefact.
+    if (local.length < 2 || !domain?.includes(".")) return;
+    seen.add(email);
+
+    // Ranked, not filtered — and that ordering is the whole rule.
+    //
+    // A site built by an agency carries the agency's address in its footer
+    // (`fuse@fuse.com.br` on a property manager's page), and structurally that is
+    // indistinguishable from a real contact. What distinguishes it is WHOSE domain
+    // it is, so own-domain wins, free-mail comes next (for a small business it
+    // genuinely IS the contact), and anything else trails.
+    //
+    // An earlier version DROPPED that last group. That was the wrong call: a
+    // company on `marca.com.br` whose contact is `contato@grupomarca.com.br` lost
+    // its only address, and a missing contact is a lead you cannot act on at all,
+    // while a stray one sits at the bottom of a list of eight where the screen
+    // shows the first two. Recall wins here; precision is preserved by the order.
+    if (rankOf(email, own) === 0) mine.push(email);
+    else if (rankOf(email, own) === 1) free.push(email);
+    else others.push(email);
+  };
+
+  for (const m of html.matchAll(/href=["']mailto:([^"']+)/gi)) add(m[1] ?? "");
+  // The text pass runs over the markup with the code blocks gone AND without those
+  // hrefs. Left in, a percent-encoded address matches a second time from the
+  // middle — `%20foo@…` yields `20foo@…`, because `%` is not an e-mail character
+  // so the match starts after it. Same address, one character of junk, no way to
+  // tell which is real.
+  // Entities decoded before the scan, because sites obfuscate addresses to defeat
+  // exactly this: `predicado.com.b&#114;` was being read as `predicado.com.b`,
+  // a truncated domain that looks like a real address and is not one.
+  const prose = decodeHtml(
+    html
+      .replace(CODE_BLOCK, " ")
+      .replace(COMMENT, " ")
+      .replace(/href=["']mailto:[^"']+/gi, " ")
+  );
+  for (const m of prose.matchAll(EMAIL)) add(m[0]);
+  return [...mine, ...free, ...others].slice(0, MAX_CONTACTS);
+}
+
+/**
+ * Every phone worth calling, from one page.
+ *
+ * Three sources, in descending order of how deliberate they are: a `wa.me` link,
+ * a `tel:` link, and — only in the unambiguous parenthesised form — text. Loose
+ * text matching was left out on purpose: a bare eleven-digit run in Brazilian
+ * copy is as likely to be a CNPJ fragment or a date range as a number, and a
+ * wrong phone in a contact list is worse than a short one.
+ */
+export function phonesFromHtml(html: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 13) return;
+    // A placeholder, not a number: `+5599999999999` came off a real site. Seven
+    // of the same digit in a row is nobody's phone.
+    if (/(\d)\1{6,}/.test(digits)) return;
+    const e164 = digits.startsWith("55") && digits.length >= 12 ? `+${digits}` : `+55${digits}`;
+    if (seen.has(e164)) return;
+    seen.add(e164);
+    if (out.length < MAX_CONTACTS) out.push(e164);
+  };
+
+  for (const m of html.matchAll(
+    /(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?55\d{10,11})/gi
+  )) {
+    add(m[1] ?? "");
+  }
+  for (const m of html.matchAll(/href=["']tel:(\+?[\d\s().-]{10,20})["']/gi)) add(m[1] ?? "");
+  // "(11) 99999-9999" — the DDD in parentheses is what makes this unambiguous.
+  for (const m of html.matchAll(/\((\d{2})\)\s?(9?\d{4})[-\s]?(\d{4})\b/g)) {
+    add(`${m[1]}${m[2]}${m[3]}`);
+  }
+  return out;
+}
+
 export function phoneFromHtml(html: string): string | null {
   const wa = html.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?55\d{10,11})/i);
   if (wa?.[1]) return wa[1].replace(/^\+?/, "+");
@@ -255,6 +430,37 @@ export function phoneFromHtml(html: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Where an address sits in the ordering: 0 own domain, 1 free-mail, 2 anything else.
+ *
+ * Its own function because the ranking has to be applied TWICE — once per page,
+ * and once more over the merged list. Merging appends, so without the second pass
+ * a third party's address found on page one outranks the company's own found on
+ * page three, which is what put `hey@craftpip.com` above the real contact.
+ */
+function rankOf(email: string, own: string): 0 | 1 | 2 {
+  const domain = email.split("@")[1] ?? "";
+  if (!own || domain === own || domain.endsWith(`.${own}`)) return 0;
+  if (FREE_MAIL.has(domain) || FREE_MAIL_ANY_TLD.test(domain)) return 1;
+  return 2;
+}
+
+/** The merged list put back in rank order. */
+export function rankEmails(emails: string[], siteHost?: string): string[] {
+  const own = siteHost ? apexOf(`https://${siteHost}`) : "";
+  return [...emails].sort((a, b) => rankOf(a, own) - rankOf(b, own));
+}
+
+/** Union of two contact lists, first-seen order, capped like the extractors. */
+function mergeContacts(current: string[], found: string[]): string[] {
+  const out = [...current];
+  for (const item of found) {
+    if (out.length >= MAX_CONTACTS) break;
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
 }
 
 // -------------------------------------------------------------- politeness
@@ -334,6 +540,19 @@ export interface CrawlOptions {
   throttle?: HostThrottle;
   /** Ignoring robots is possible but must be explicit and deliberate. */
   ignoreRobots?: boolean;
+  /**
+   * Turns the link-following into a real breadth-first crawl, capped here.
+   *
+   * Absent, the behaviour is exactly what it was: fetch the homepage, then at most
+   * `depth` pages whose path looks like a contact page. That is tuned for the
+   * scorer, which needs a phone and some prose and nothing else.
+   *
+   * Set, `depth` becomes what its name says — how many levels deep to go — and
+   * this is the page budget for the whole walk. It exists because a real site put
+   * its contact address behind a menu that the shallow crawl never reached, and
+   * for a lead with no CNPJ that address IS the deliverable.
+   */
+  maxPages?: number;
 }
 
 async function fetchRobots(http: HttpPort, origin: string, timeoutMs: number): Promise<Robots> {
@@ -356,15 +575,32 @@ async function fetchRobots(http: HttpPort, origin: string, timeoutMs: number): P
 }
 
 /** Internal links worth a second look, in priority order. */
+/**
+ * Paths worth following, widest first.
+ *
+ * Widened after a real site's contact page was missed: the list only knew
+ * `contato`, so `/contact`, `/atendimento` and `/unidades` were invisible. A
+ * Brazilian site spells this a dozen ways and half of them are in English.
+ */
 const INTERESTING =
-  /(contato|fale-conosco|sobre|quem-somos|servicos|serviços|produtos|planos|precos|preços)/i;
+  /(contato|contatos|contact|fale-conosco|fale-com|falecom|atendimento|suporte|ajuda|sobre|sobre-nos|quem-somos|institucional|empresa|servicos|serviços|produtos|solucoes|soluções|planos|precos|preços|orcamento|orçamento|unidades|filiais|lojas|onde-estamos|localizacao|localização|trabalhe)/i;
 
-function internalLinks(html: string, base: string, limit: number): string[] {
-  const out: string[] = [];
+/**
+ * Every internal link on a page, contact-ish ones first.
+ *
+ * `all` is what separates the deep crawl from the shallow one. Shallow keeps
+ * `INTERESTING` as a hard filter and takes a couple of links — enough to find a
+ * phone, which is all the scorer needs. Deep uses it as a PRIORITY instead and
+ * will walk anything on the host, because a contact address can be three clicks
+ * in behind a menu nobody named `/contato`.
+ */
+function internalLinks(html: string, base: string, limit: number, all = false): string[] {
+  const priority: string[] = [];
+  const rest: string[] = [];
   const seen = new Set<string>();
   const baseHost = hostOf(base);
   for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
-    if (out.length >= limit) break;
+    if (priority.length + rest.length >= limit * 4) break;
     const raw = m[1];
     if (!raw || raw.startsWith("mailto:") || raw.startsWith("tel:")) continue;
     let abs: URL;
@@ -377,11 +613,16 @@ function internalLinks(html: string, base: string, limit: number): string[] {
     if (hostOf(abs.href) !== baseHost) continue;
     const key = abs.origin + abs.pathname;
     if (seen.has(key) || abs.pathname === "/" || abs.pathname === "") continue;
-    if (!INTERESTING.test(abs.pathname)) continue;
+    const interesting = INTERESTING.test(abs.pathname);
+    if (!interesting && !all) continue;
+    // Assets and archives are bytes with no contact in them.
+    if (all && /\.(pdf|jpe?g|png|gif|svg|webp|zip|docx?|xlsx?|mp4|mp3)$/i.test(abs.pathname)) {
+      continue;
+    }
     seen.add(key);
-    out.push(abs.origin + abs.pathname);
+    (interesting ? priority : rest).push(key);
   }
-  return out;
+  return [...priority, ...rest].slice(0, limit);
 }
 
 /**
@@ -484,19 +725,69 @@ export async function crawlSite(
 
       let text = signals.textExcerpt ?? "";
       const depth = Math.max(0, Math.min(opts.depth ?? 0, 5));
-      if (depth > 0 && !signals.isLinkHub) {
+      const siteHost = hostOf(signals.finalUrl ?? "");
+
+      /** Everything read off one fetched page. */
+      const absorb = (pageHtml: string) => {
+        signals.pagesFetched++;
+        // Contact pages are where the real phone usually lives.
+        signals.sitePhone ??= phoneFromHtml(pageHtml);
+        // Merged rather than overwritten: the contact page is a different page
+        // from the home page, which is the whole reason links are followed.
+        // `siteHost` and not the page's own host, so a subpage still measures
+        // "own domain" against the site.
+        signals.emails = mergeContacts(signals.emails, emailsFromHtml(pageHtml, siteHost));
+        signals.phones = mergeContacts(signals.phones, phonesFromHtml(pageHtml));
+        text = `${text} ${extractText(pageHtml)}`;
+      };
+
+      if (opts.maxPages && opts.maxPages > 1 && !signals.isLinkHub) {
+        // The deep walk: breadth-first over the host, contact-ish paths first,
+        // stopping at the page budget. Every fetch still goes through `get`, so
+        // robots.txt and the per-host delay apply exactly as before.
+        const budget = Math.min(opts.maxPages, 40);
+        const levels = Math.max(depth, 1);
+        const visited = new Set<string>([signals.finalUrl.split("#")[0] ?? signals.finalUrl]);
+        let frontier = internalLinks(html, signals.finalUrl, budget, true);
+
+        for (let level = 0; level < levels && signals.pagesFetched < budget; level++) {
+          const next: string[] = [];
+          for (const link of frontier) {
+            if (signals.pagesFetched >= budget) break;
+            if (visited.has(link)) continue;
+            visited.add(link);
+            const page = await get(link);
+            if (!page?.res.ok) continue;
+            absorb(page.html);
+            // Enough contacts already: more pages would cost politeness budget
+            // to learn nothing.
+            if (signals.emails.length >= 3 && signals.phones.length >= 2) break;
+            if (level + 1 < levels) {
+              next.push(...internalLinks(page.html, link, budget, true));
+            }
+          }
+          frontier = next;
+        }
+      } else if (depth > 0 && !signals.isLinkHub) {
         for (const link of internalLinks(html, signals.finalUrl, depth)) {
           const page = await get(link);
           if (!page?.res.ok) continue;
-          signals.pagesFetched++;
-          // Contact pages are where the real phone usually lives.
-          signals.sitePhone ??= phoneFromHtml(page.html);
-          text = `${text} ${extractText(page.html)}`;
+          absorb(page.html);
         }
-        // Re-cap after concatenation; the 8 KB ceiling is what keeps this table
-        // from becoming a copy of the Brazilian web.
-        signals.textExcerpt = text.slice(0, 8000);
       }
+
+      // After EITHER branch, not inside one of them.
+      //
+      // These two lines used to live in the shallow branch alone, which made the
+      // deep walk silently worse than the crawl it replaced: it read a dozen
+      // pages, accumulated their text, and then threw it away — the scorer saw
+      // only the home page. And the ranking never ran, so a third party's address
+      // found first outranked the company's own found later.
+      //
+      // Re-cap after concatenation: the 8 KB ceiling is what keeps this table from
+      // becoming a copy of the Brazilian web.
+      signals.emails = rankEmails(signals.emails, siteHost);
+      signals.textExcerpt = text.slice(0, 8000);
 
       // Probes search the rendered text AND what the page declares about
       // itself, because probe vocabulary genuinely lives in a meta description

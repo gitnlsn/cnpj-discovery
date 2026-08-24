@@ -228,7 +228,7 @@ export async function runPipeline(
       };
       await db
         .insert(scores)
-        .values({ projectId: input.projectId, cnpj: r.cnpj, ...row })
+        .values({ projectId: input.projectId, cnpj: r.id, ...row })
         .onConflictDoUpdate({
           target: [scores.projectId, scores.cnpj],
           set: row,

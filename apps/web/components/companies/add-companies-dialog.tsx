@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -88,6 +89,9 @@ export function AddCompaniesDialog({
   const [porte, setPorte] = useState("");
   const [matrizOnly, setMatrizOnly] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+  // Off by default, and the default is the whole point: it changes what the
+  // count means and what the query costs. See `includeCnaeSecundaria`.
+  const [cnaeMode, setCnaeMode] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   // Whether anything will look for a company that has no site to guess.
@@ -103,6 +107,7 @@ export function AddCompaniesDialog({
 
   const filters = {
     cnae: chosen.length ? chosen : undefined,
+    includeCnaeSecundaria: cnaeMode === "any" || undefined,
     uf: uf.length === 2 ? [uf.toUpperCase()] : undefined,
     hasPhone: hasPhone || undefined,
     foundedFrom: /^\d{4}-\d{2}-\d{2}$/.test(foundedFrom) ? foundedFrom : undefined,
@@ -181,6 +186,16 @@ export function AddCompaniesDialog({
             {reach.data ? (
               <>
                 <b className="tabular">{nf(reach.data.total)}</b> empresas nos CNAEs escolhidos
+                {reach.data.secundaria > 0 && (
+                  // Mostrado como soma, não somado: quem faz disso o negócio e
+                  // quem lista como atividade secundária são prospectos
+                  // diferentes, e o número que decide a mira é a divisão.
+                  <>
+                    {" "}
+                    (<span className="tabular">{nf(reach.data.principal)}</span> principal +{" "}
+                    <span className="tabular">{nf(reach.data.secundaria)}</span> secundária)
+                  </>
+                )}{" "}
                 · <span className="tabular">{nf(reach.data.withPhone)}</span> com telefone ·{" "}
                 <span className="tabular">{nf(reach.data.recent)}</span> abertas nos últimos 24
                 meses
@@ -281,6 +296,25 @@ export function AddCompaniesDialog({
                   options={[
                     { value: "com", label: "com site" },
                     { value: "", label: "todas" },
+                  ]}
+                />
+              </Field>
+
+              <Field
+                label="Atividade"
+                hint={
+                  cnaeMode === "any"
+                    ? "inclui quem registrou o CNAE como atividade secundária — alcança bem mais empresas, e a consulta fica em ~1 s"
+                    : "só quem registrou o CNAE como atividade principal"
+                }
+                className="col-span-2"
+              >
+                <Choices
+                  value={cnaeMode}
+                  onChange={setCnaeMode}
+                  options={[
+                    { value: "", label: "só principal" },
+                    { value: "any", label: "principal + secundária" },
                   ]}
                 />
               </Field>
@@ -387,7 +421,28 @@ export function AddCompaniesDialog({
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{c.cnae}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {c.cnae}
+                        {c.cnaeMatch === "secundaria" && (
+                          // O selo é necessário porque a célula mostra o CNAE
+                          // PRINCIPAL da empresa, que não é o que a trouxe até
+                          // aqui. Sem ele a linha parece fora do filtro.
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge
+                                variant="outline"
+                                className="ml-1 cursor-default px-1 py-0 text-[10px] font-normal"
+                              >
+                                2ª
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              alcançada pela atividade secundária{" "}
+                              {c.cnaeSecundariaMatch.join(", ")}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs">
                         {c.municipio ?? "?"}/{c.uf}
                       </TableCell>

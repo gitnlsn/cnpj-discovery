@@ -1,6 +1,6 @@
 import type { HttpPort } from "../ports/index";
 import { nodeHttp } from "../ports/index";
-import { parseDuckDuckGo, type SerpPage } from "../domain/serpParse";
+import { parseDuckDuckGo, type SerpPage, type SearchPageOptions } from "../domain/serpParse";
 
 /**
  * DuckDuckGo, without a browser.
@@ -72,7 +72,9 @@ export function createDdgSearch(opts: DdgSearchOptions = {}) {
    * three different answers all the way to the caller. Only a transport failure
    * throws.
    */
-  async function search(query: string): Promise<SerpPage> {
+  // `page`, not `opts`: the factory closure already owns that name, and shadowing
+  // it here silently detaches the budget hooks below.
+  async function search(query: string, page: SearchPageOptions = {}): Promise<SerpPage> {
     let lastErr: Error | null = null;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -96,7 +98,14 @@ export function createDdgSearch(opts: DdgSearchOptions = {}) {
             "Accept-Language": "pt-BR,pt;q=0.9",
             Accept: "text/html,application/xhtml+xml",
           },
-          body: new URLSearchParams({ q: query, kl: "br-pt" }).toString(),
+          // `s` is the result offset — what DuckDuckGo's own "next page" sends.
+          // Absent for page one, so the request a presence check makes is
+          // byte-for-byte the one it always made.
+          body: new URLSearchParams(
+            page.start
+              ? { q: query, kl: "br-pt", s: String(page.start) }
+              : { q: query, kl: "br-pt" }
+          ).toString(),
         });
       } catch (err) {
         lastErr = new DdgError(`erro de rede na busca: ${(err as Error).message}`);
@@ -122,7 +131,7 @@ export function createDdgSearch(opts: DdgSearchOptions = {}) {
         );
       }
 
-      return parseDuckDuckGo(await res.text());
+      return parseDuckDuckGo(await res.text(), { maxHits: page.maxHits });
     }
 
     throw lastErr ?? new DdgError("busca no DuckDuckGo falhou");

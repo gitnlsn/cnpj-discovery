@@ -15,6 +15,21 @@ export const ESTAB = {
   SITUACAO: 5,
   DATA_INICIO: 10,
   CNAE_PRINCIPAL: 11,
+  /**
+   * As atividades secundárias, todas numa coluna só.
+   *
+   * É uma lista de códigos de 7 dígitos separada por vírgula
+   * ("4712100,4721102"), e não um código. Como `csvEscape` já cita qualquer
+   * valor com vírgula e o `read_csv` da conversão lê com `quote = '"'`, a ida
+   * e volta pelo CSV de staging entrega o campo inteiro sem tratamento novo.
+   *
+   * Medido na parte 0: 56,7% das linhas ativas têm ao menos um código aqui,
+   * 4,25 em média entre elas, no máximo 99 — e em 41,3% das listas a divisão
+   * do CNAE principal não aparece. Essa última fração é exatamente a empresa
+   * que a consulta por CNAE perdia: ela faz o que você procura, mas registrou
+   * outra coisa como atividade principal.
+   */
+  CNAE_SECUNDARIA: 12,
   TIPO_LOGRADOURO: 13,
   LOGRADOURO: 14,
   NUMERO: 15,

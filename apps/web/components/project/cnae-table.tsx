@@ -181,6 +181,22 @@ export function CnaeTable({ projectId }: { projectId: string }) {
                   <TableHead className="w-36">situação</TableHead>
                   <TableHead className="max-w-[26rem]">descrição oficial</TableHead>
                   <TableHead className="w-24 text-right">empresas</TableHead>
+                  <TableHead className="w-24 text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help underline decoration-dotted underline-offset-2">
+                          2ª ativ.
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm">
+                        Empresas que registraram este CNAE como atividade SECUNDÁRIA, e não como
+                        principal. Não está somado na coluna &quot;empresas&quot;: quem faz
+                        disso o negócio e quem lista como atividade secundária são prospectos
+                        diferentes. Travessão significa que ninguém mediu ainda — ligue
+                        &quot;principal + secundária&quot; ao adicionar empresas.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableHead>
                   <TableHead className="w-24 text-right">com tel.</TableHead>
                   <TableHead className="w-24 text-right">24 meses</TableHead>
                   <TableHead className="w-28 text-right">
@@ -239,6 +255,12 @@ export function CnaeTable({ projectId }: { projectId: string }) {
                         )}
                       </TableCell>
                       <TableCell className="tabular text-right">{nf(p.reachTotal)}</TableCell>
+                      <TableCell className="tabular text-right text-muted-foreground">
+                        {/* Travessão, não zero: "nunca medido" e "medido e não
+                            achou ninguém" são fatos opostos, e a mesma regra que
+                            a coluna "rendeu" já segue. */}
+                        {p.reachSecundaria > 0 ? nf(p.reachSecundaria) : "—"}
+                      </TableCell>
                       <TableCell className="tabular text-right text-muted-foreground">
                         {nf(p.reachWithPhone)}
                       </TableCell>

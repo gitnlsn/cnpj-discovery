@@ -22,6 +22,8 @@ export {
   analyzeHtml,
   websiteFromEmail,
   phoneFromHtml,
+  emailsFromHtml,
+  phonesFromHtml,
   parseRobots,
   robotsAllows,
   HostThrottle,
@@ -32,10 +34,15 @@ export {
 export {
   createGooglePlaces,
   placesQuery,
+  discoveryQuery,
   PlacesError,
   WEBSITE_FIELD_MASK,
+  DISCOVERY_FIELD_MASK,
   PLACES_SKU,
+  PLACES_MAX_RESULTS,
   type PlaceWebsite,
+  type PlaceBusiness,
+  type PlaceSearchPage,
 } from "./adapters/googlePlaces";
 export {
   Budget,

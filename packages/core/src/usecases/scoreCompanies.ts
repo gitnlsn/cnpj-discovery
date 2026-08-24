@@ -47,7 +47,26 @@ const PRESENCE_HITS = 3;
 const PRESENCE_DESC_CHARS = 300;
 
 export interface ScoreCandidate {
-  cnpj: string;
+  /**
+   * The join key the model must echo back.
+   *
+   * A CNPJ for a company from the Receita, the registrable domain for a business
+   * found on the open internet. Renamed from `cnpj` because it stopped being one:
+   * an open-internet lead has no registry number — finding it is the point of the
+   * run — and calling the key `cnpj` would mean inventing a value to fill it.
+   *
+   * That invention is the same error a fabricated fit score would be. A synthetic
+   * CNPJ would reach the detail sheet, the CSV export and `contacts.cnpj`, filing
+   * a phone number under a number that does not exist.
+   */
+  id: string;
+  /**
+   * The registry number, when there IS one.
+   *
+   * A fact about the company rather than its key, which is why it is optional and
+   * nullable. Null means "we do not know it", never "it has none".
+   */
+  cnpj?: string | null;
   razaoSocial: string | null;
   nomeFantasia: string | null;
   cnae: string;
@@ -107,7 +126,8 @@ export interface ScoreCandidate {
 }
 
 export interface ScoreResult {
-  cnpj: string;
+  /** Echoes `ScoreCandidate.id`, so a result can be attached to its candidate. */
+  id: string;
   fits: Record<string, number | null>;
   bestFit: number | null;
   tier: "hot" | "warm" | "cold" | null;
@@ -138,10 +158,17 @@ function years(from: string | null): string {
  * "we never read the page", and the model has no way to recover the difference.
  */
 export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
+  // `renderCandidate` builds the USER message, which `promptSha` does not hash —
+  // so this can change shape freely without restating what graded an old lead.
   const f: string[] = [
-    `cnpj: ${c.cnpj}`,
+    c.cnpj ? `cnpj: ${c.cnpj}` : `ref: ${c.id}`,
     `nome: ${c.nomeFantasia ?? c.razaoSocial ?? "(sem nome)"}`,
-    `cnae: ${c.cnae}${c.cnaeDescricao ? ` (${c.cnaeDescricao})` : ""}`,
+    // Said outright rather than omitted. A missing line invites the model to
+    // reason from the absence; a stated one tells it the absence means nothing.
+    // Same reasoning as "site: NÃO VERIFICADO" below.
+    c.cnae
+      ? `cnae: ${c.cnae}${c.cnaeDescricao ? ` (${c.cnaeDescricao})` : ""}`
+      : `cnae: não encontrado na Receita (não sabemos)`,
     `local: ${c.municipio ?? "?"}/${c.uf ?? "?"}`,
     years(c.dataInicioAtividade),
   ];
@@ -237,6 +264,8 @@ export function renderCandidate(c: ScoreCandidate, spec: ProjectSpec): string {
 
 interface RawResult {
   cnpj?: string;
+  /** The same field under the name an open-internet run asks for. */
+  ref?: string;
   justification?: string;
   wrong_business_type?: boolean;
   confidence?: string;
@@ -249,9 +278,9 @@ interface RawResult {
 
 const CONFIDENCES = ["high", "medium", "low", "cannot_determine"] as const;
 
-function failed(cnpj: string, sha: string, error: string): ScoreResult {
+function failed(id: string, sha: string, error: string): ScoreResult {
   return {
-    cnpj,
+    id,
     fits: {},
     bestFit: null,
     tier: null,
@@ -270,6 +299,16 @@ function failed(cnpj: string, sha: string, error: string): ScoreResult {
 export interface ScoreOptions {
   batchSize?: number;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * Which property the model echoes to identify each business.
+   *
+   * "cnpj" by default, so an ordinary run produces the byte-identical system
+   * prompt it always did and keeps its promptSha. "ref" is for open-internet
+   * leads, whose key is a domain.
+   */
+  keyField?: "cnpj" | "ref";
+  /** Adds `WEB_LEAD_RULES` — see the note there on why absence is not evidence. */
+  withWebLead?: boolean;
 }
 
 export async function scoreCompanies(
@@ -288,8 +327,15 @@ export async function scoreCompanies(
   const withLinkedIn = candidates.some((c) =>
     c.webPresence?.some((p) => p.kind === "linkedin")
   );
-  const system = buildRubricPrompt(spec, { withImpressions, withWebPresence, withLinkedIn });
-  const schema = buildScoreSchema(spec);
+  const key = opts.keyField ?? "cnpj";
+  const system = buildRubricPrompt(spec, {
+    withImpressions,
+    withWebPresence,
+    withLinkedIn,
+    withWebLead: opts.withWebLead,
+    key,
+  });
+  const schema = buildScoreSchema(spec, { key });
   const sha = promptSha(system);
   const axisKeys = spec.rubric.axes.map((a) => a.key);
   const batchSize = Math.min(Math.max(opts.batchSize ?? 10, 1), 20);
@@ -319,17 +365,27 @@ export async function scoreCompanies(
       results = Array.isArray(v) ? v : (v.results ?? v.leads ?? []);
     } catch (err) {
       const message = (err as Error).message.slice(0, 300);
-      for (const c of batch) out.push(failed(c.cnpj, sha, message));
+      for (const c of batch) out.push(failed(c.id, sha, message));
       opts.onProgress?.(Math.min(i + batchSize, candidates.length), candidates.length);
       continue;
     }
 
-    const byCnpj = new Map(results.map((r) => [String(r.cnpj ?? "").replace(/\D/g, ""), r]));
+    // Normalisation has to know what the key IS.
+    //
+    // The digits-only strip exists because a model asked for a CNPJ will happily
+    // return it formatted. Applied to a key that is not a number it is a bug with
+    // no symptom of its own: every id collapses to "" , every entry overwrites the
+    // last, and all but one candidate come back as "the model did not answer" —
+    // which reads as a model problem rather than a lookup problem.
+    const normalize = (raw: unknown): string =>
+      key === "cnpj" ? String(raw ?? "").replace(/\D/g, "") : String(raw ?? "").trim();
+
+    const byKey = new Map(results.map((r) => [normalize(key === "cnpj" ? r.cnpj : r.ref), r]));
 
     for (const c of batch) {
-      const r = byCnpj.get(c.cnpj);
+      const r = byKey.get(normalize(c.id));
       if (!r) {
-        out.push(failed(c.cnpj, sha, "modelo não devolveu resultado para este CNPJ"));
+        out.push(failed(c.id, sha, "modelo não devolveu resultado para este negócio"));
         continue;
       }
 
@@ -353,7 +409,7 @@ export async function scoreCompanies(
 
       const best = bestFit(fits);
       out.push({
-        cnpj: c.cnpj,
+        id: c.id,
         fits,
         bestFit: best,
         tier: tierFor(fits),

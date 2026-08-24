@@ -57,10 +57,104 @@ export function hostOf(url: string): string {
   }
 }
 
+/**
+ * Second-level suffixes that belong to a registry, so the name is one label deeper.
+ *
+ * Brazil puts almost every company under a two-label suffix — `com.br` — which is
+ * why this list exists at all: without it `padaria.com.br` and `loja.com.br` would
+ * both reduce to `com.br` and every Brazilian business would be the same lead.
+ */
+const MULTI_LABEL_SUFFIXES = new Set([
+  // Brasil (CGI.br). Só os que aparecem em site de empresa; a lista completa tem
+  // mais de cem e a maioria nunca vai ser vista aqui.
+  "com.br",
+  "net.br",
+  "org.br",
+  "ind.br",
+  "eco.br",
+  "cnt.br",
+  "art.br",
+  "esp.br",
+  "adm.br",
+  "adv.br",
+  "arq.br",
+  "eng.br",
+  "med.br",
+  "odo.br",
+  "vet.br",
+  "psi.br",
+  "srv.br",
+  "tur.br",
+  "agr.br",
+  "emp.br",
+  "blog.br",
+  "nom.br",
+  "coop.br",
+  "gov.br",
+  "edu.br",
+  "jus.br",
+  "mil.br",
+  "leg.br",
+  "mp.br",
+  // Vizinhos e alguns estrangeiros que aparecem em resultado brasileiro.
+  "com.ar",
+  "com.pt",
+  "com.mx",
+  "com.uy",
+  "com.py",
+  "com.co",
+  "co.uk",
+]);
+
 export const isHub = (host: string) =>
   LINK_HUBS.some((h) => host === h || host.endsWith(`.${h}`));
 
 export const isBuilder = (host: string) => FREE_BUILDERS.some((s) => host.endsWith(s));
+
+/**
+ * The registrable domain — who a site belongs to, rather than which machine it is.
+ *
+ * `hostOf` answers the second question, and that is not enough to identify a
+ * business: `blog.padaria.com.br` and `padaria.com.br` are one company, and
+ * counting them twice means one lead shows up as two.
+ *
+ * Hand-rolled rather than a public-suffix dependency, and the honest way to read
+ * that decision is as a judgement about which errors are affordable here:
+ *
+ * - **False merge** — two businesses collapse into one key, so one lead is
+ *   silently dropped. Happens for any multi-label suffix missing from the set
+ *   above: `*.github.io`, `*.vercel.app`, `*.netlify.app`, `*.pages.dev`, and
+ *   every foreign ccTLD second level not listed. Partly headed off by the
+ *   `isBuilder` check, which is what stops every free-builder site in
+ *   Brazil from merging into `wixsite.com`.
+ * - **False split** — one business becomes two keys and shows up twice. Happens
+ *   for a suffix wrongly in the set, or a company genuinely running
+ *   `loja.x.com.br` next to `x.com.br` as separate brands.
+ *
+ * A false split costs one wasted crawl; a false merge costs one missed lead.
+ * Both are visible in the tab and neither touches the Receita side, which is why
+ * a list that is knowingly incomplete is the right trade here — and would not be
+ * for anything security-shaped. Top it up from what real runs surface, the same
+ * way `AGGREGATORS` is maintained.
+ */
+export function apexOf(url: string): string {
+  const host = hostOf(url);
+  if (!host) return "";
+
+  // An IP address is its own apex: there is no registry level to climb to.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+
+  // On a free builder the SUBDOMAIN is the identity — `alfa.wixsite.com` is one
+  // business and `beta.wixsite.com` is another. Reusing `FREE_BUILDERS` rather
+  // than restating those hosts keeps one answer to "what does this host mean".
+  if (isBuilder(host)) return host;
+
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+
+  const lastTwo = parts.slice(-2).join(".");
+  return MULTI_LABEL_SUFFIXES.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
+}
 
 /**
  * Paths on a social host that are content, not somebody's profile.
